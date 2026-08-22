@@ -24,18 +24,16 @@ infinite-canvas-agent                                    # 启动
 
 ### 形态二：服务器集中模式（部署跟随画布，用户零安装）
 
-`agent` 随 docker-compose 一并部署在服务器上（容器 `infinite-canvas-agent`，对外端口 `17371`）。Codex / Claude 直接远程连接服务器的 MCP 地址，**任何人都无需在本地安装任何东西**：
+`agent` 随 docker-compose 一并部署在服务器上（容器 `infinite-canvas-agent`），且 Go 后端提供**同源反向代理**（`/api/agent/*`），浏览器与远程 Agent 都不需要接触 token：
 
-```bash
-# Codex（远程 HTTP MCP）
-codex mcp add infinite-canvas --transport http http://<服务器IP>:17371/mcp
-# Claude Code（远程 HTTP MCP）
-claude mcp add infinite-canvas --transport http http://<服务器IP>:17371/mcp
-```
+- **浏览器（用户零操作）**：画布页面自动探测同源 `/api/agent/health`，探测到即自动连接，无需任何 URL 参数或 token。
+- **Codex / Claude（远程一行连接）**，走画布同域已放行端口即可：
+  ```bash
+  codex mcp add infinite-canvas --transport http http://<服务器IP>:3100/api/agent/mcp
+  ```
+- 亦可通过 agent 容器直连端口 `17371`（需云安全组放行）：`http://<服务器IP>:17371/mcp`。
 
-浏览器侧连接：打开画布链接时追加 `?agentUrl=http://<服务器IP>:17371&agentToken=<token>`（token 在服务器 `docker exec infinite-canvas-agent cat /root/.infinite-canvas/canvas-agent.json` 中查看；多用户场景下建议运维方自行管理 token）。
-
-> 部署注意事项：服务器需在云安全组放行 TCP `17371`；agent 容器默认 `AGENT_HOST=0.0.0.0` 对外监听（生产环境请自行评估鉴权策略）。
+> 部署说明：`docker-compose.yml` 中 `AGENT_TOKEN` 由 `.env` 提供，Go 容器与 agent 容器共享同一 token，浏览器与远程 Agent 均无感。
 
 ## 画布能力
 
