@@ -508,12 +508,26 @@ function LocalAgentHint() {
 
     const copyExampleLink = async () => {
         const base = `${window.location.origin}${window.location.pathname}`;
+        const text = `${base}${queryExample}`;
         try {
-            await navigator.clipboard.writeText(`${base}${queryExample}`);
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                // 非安全上下文（http 部署）下 clipboard API 不可用，降级为旧式复制。
+                const textarea = document.createElement("textarea");
+                textarea.value = text;
+                textarea.style.position = "fixed";
+                textarea.style.opacity = "0";
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand("copy");
+                document.body.removeChild(textarea);
+            }
             setCopied(true);
             window.setTimeout(() => setCopied(false), 2000);
         } catch {
-            // 剪贴板受限时静默失败，不影响其余功能
+            // 复制仍受限时提示用户手动复制
+            window.prompt("请手动复制示例链接：", text);
         }
     };
 
