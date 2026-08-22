@@ -40,6 +40,7 @@ import { CanvasConfigNodePanel } from "../components/canvas-config-node-panel";
 import { CanvasDirector } from "../components/canvas-director";
 import { CanvasDirectorNodePanel } from "../components/canvas-director-node-panel";
 import { CanvasAssistantPanel } from "../components/canvas-assistant-panel";
+import { LocalAgentBridge } from "../components/local-agent-bridge";
 import { CanvasNodeContextMenu } from "../components/canvas-context-menu";
 import { CanvasNodeAngleDialog, type CanvasImageAngleParams } from "../components/canvas-node-angle-dialog";
 import { CanvasNodeCropDialog, type CanvasImageCropRect } from "../components/canvas-node-crop-dialog";
@@ -2976,6 +2977,19 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [agentEffectiveConfig, currentProject?.title, projectId],
     );
 
+    /** 本地 Agent 桥使用的上下文（空创作状态）。 */
+    const getLocalAgentContext = useCallback<() => unknown>(
+        () =>
+            getCanvasAgentContext({
+                phase: "intake",
+                approvedNodeIds: [],
+                referenceNodeIds: [],
+                pendingTaskIds: [],
+                completedTaskIds: [],
+            }),
+        [getCanvasAgentContext],
+    );
+
     const executeCanvasAgentAction = useCallback(
         async (action: CanvasAgentAction, messageReferenceNodeIds: string[]): Promise<CanvasAgentToolResult> => {
             const args = action.arguments;
@@ -3650,6 +3664,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     if (!projectLoaded) return <CanvasRefreshShell />;
     return (
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
+            <LocalAgentBridge getContext={getLocalAgentContext} executeAction={executeCanvasAgentAction} />
             <CanvasSidePanel
                 nodes={nodes}
                 selectedNodeIds={selectedNodeIds}

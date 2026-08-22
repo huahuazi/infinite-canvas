@@ -4,6 +4,7 @@ import { App, Button, Form, Input, Modal, Segmented, Select, Switch } from "antd
 import { useEffect, useState } from "react";
 
 import { GrokTtsVoiceSelect } from "@/components/grok-tts-voice-select";
+import { ModelScriptEditor } from "@/components/layout/model-script-editor";
 import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
 import { fetchUserConfig, measureUserStorageProvider, syncUserModelConfig, syncUserStorageProvider } from "@/services/api/user-config";
@@ -44,6 +45,7 @@ export function AppConfigModal() {
     const [userStorage, setUserStorage] = useState(() => defaultUserStorageProvider());
     const [userWebDAVStorage, setUserWebDAVStorage] = useState(() => defaultUserWebDAVStorageProvider());
     const [measuringStorageType, setMeasuringStorageType] = useState<"s3" | "webdav" | null>(null);
+    const [scriptEditorChannel, setScriptEditorChannel] = useState<{ id: string; name: string; capability: ModelCapability; script: string } | null>(null);
     const [storageUsageText, setStorageUsageText] = useState("");
     const [webDAVStorageUsageText, setWebDAVStorageUsageText] = useState("");
     const config = useConfigStore((state) => state.config);
@@ -271,14 +273,15 @@ export function AppConfigModal() {
     };
 
     return (
-        <Modal
-            title={
-                <div>
-                    <div className="text-lg font-semibold">配置与用户偏好</div>
-                    <div className="mt-1 text-xs font-normal text-stone-500">模型、渠道和画布默认行为</div>
-                </div>
-            }
-            open={isConfigOpen}
+        <>
+            <Modal
+                title={
+                    <div>
+                        <div className="text-lg font-semibold">配置与用户偏好</div>
+                        <div className="mt-1 text-xs font-normal text-stone-500">模型、渠道和画布默认行为</div>
+                    </div>
+                }
+                open={isConfigOpen}
             width={960}
             centered
             onCancel={() => setConfigDialogOpen(false)}
@@ -353,6 +356,29 @@ export function AppConfigModal() {
                                             </div>
                                         </div>
                                         <div className="text-xs text-stone-500">已保存 {channel.models.length} 个模型</div>
+                                        <div className="flex items-center gap-2">
+                                            <Select
+                                                size="small"
+                                                value={channel.scriptCapability || "text"}
+                                                options={[
+                                                    { label: "生图", value: "image" },
+                                                    { label: "视频", value: "video" },
+                                                    { label: "文本", value: "text" },
+                                                    { label: "音频", value: "audio" },
+                                                ]}
+                                                onChange={(capability: ModelCapability) => patchLocalChannel(channel.id, { scriptCapability: capability })}
+                                                className="w-[90px]"
+                                            />
+                                            <Button
+                                                size="small"
+                                                onClick={() =>
+                                                    setScriptEditorChannel({ id: channel.id, name: channel.name || `本地渠道 ${index + 1}`, capability: (channel.scriptCapability as ModelCapability) || "text", script: channel.script || "" })
+                                                }
+                                            >
+                                                {channel.script ? "编辑调用脚本" : "自定义调用脚本"}
+                                            </Button>
+                                            {channel.script ? <span className="text-xs text-green-600 dark:text-green-400">脚本已设</span> : null}
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -377,7 +403,17 @@ export function AppConfigModal() {
                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                         {modelGroups.map((group) => (
                             <Form.Item key={group.modelKey} label={group.defaultLabel} className="mb-4">
-                                <ModelPicker config={modelConfig} value={modelConfig[group.modelKey]} channelId={modelConfig[group.channelKey]} onChange={(model, channelId) => { updateConfig(group.modelKey, model); if (channelId) updateConfig(group.channelKey, channelId); }} capability={group.capability} fullWidth />
+                                <ModelPicker
+                                    config={modelConfig}
+                                    value={modelConfig[group.modelKey]}
+                                    channelId={modelConfig[group.channelKey]}
+                                    onChange={(model, channelId) => { updateConfig(group.modelKey, model); if (channelId) updateConfig(group.channelKey, channelId); }}
+                                    capability={group.capability}
+                                    fullWidth
+                                    showReasoningEffort={group.capability === "text"}
+                                    reasoningEffort={config.reasoningEffort || "auto"}
+                                    onReasoningEffortChange={(value) => updateConfig("reasoningEffort", value as AiConfig["reasoningEffort"])}
+                                />
                             </Form.Item>
                         ))}
                     </div>
@@ -513,7 +549,19 @@ export function AppConfigModal() {
                     ) : null}
                 </Form>
             </div>
-        </Modal>
+            </Modal>
+            <ModelScriptEditor
+                open={Boolean(scriptEditorChannel)}
+                capability={scriptEditorChannel?.capability || "text"}
+                modelName={scriptEditorChannel?.name || ""}
+                value={scriptEditorChannel?.script || ""}
+                onClose={() => setScriptEditorChannel(null)}
+                onSave={(script) => {
+                    if (!scriptEditorChannel) return;
+                    patchLocalChannel(scriptEditorChannel.id, { script });
+                }}
+            />
+        </>
     );
 }
 

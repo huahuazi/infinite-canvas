@@ -1,7 +1,11 @@
 "use client";
 
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
+    Check,
+    ChevronDown,
+    Copy,
     History,
     Bot,
     PanelRightClose,
@@ -399,6 +403,8 @@ export function CanvasAssistantPanel({
                     </div>
                 </div>
 
+                <LocalAgentHint />
+
                 <div ref={messageListRef} className="thin-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
                     {view === "history" ? (
                         <AssistantHistory
@@ -487,6 +493,81 @@ export function CanvasAssistantPanel({
                 </Modal>
             </motion.aside>
         </motion.div>
+    );
+}
+
+/** 本地 Agent 连接引导提示条：读取 URL 参数展示连接状态，并提供示例链接拷贝。 */
+function LocalAgentHint() {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const searchParams = useSearchParams();
+    const [collapsed, setCollapsed] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const isConnected = Boolean(searchParams.get("agentUrl") && searchParams.get("agentToken"));
+    const queryExample = "?agentUrl=<Local URL>&agentToken=<Connect token>";
+
+    const copyExampleLink = async () => {
+        const base = `${window.location.origin}${window.location.pathname}`;
+        try {
+            await navigator.clipboard.writeText(`${base}${queryExample}`);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 2000);
+        } catch {
+            // 剪贴板受限时静默失败，不影响其余功能
+        }
+    };
+
+    return (
+        <div className="border-b px-4 py-3" style={{ borderColor: theme.node.stroke }}>
+            <div className="rounded-xl border px-3 py-2.5" style={{ background: theme.node.fill, borderColor: theme.node.stroke }}>
+                <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
+                        <span className="inline-block size-2 shrink-0 rounded-full" style={{ background: isConnected ? "#22c55e" : theme.node.muted }} />
+                        <span className="truncate">{isConnected ? "已连接本地 Agent" : "本地 Agent 模式"}</span>
+                    </div>
+                    <button
+                        type="button"
+                        className="shrink-0 transition-transform"
+                        style={{ color: theme.node.muted }}
+                        aria-expanded={!collapsed}
+                        aria-label={collapsed ? "展开本地 Agent 引导" : "折叠本地 Agent 引导"}
+                        onClick={() => setCollapsed((value) => !value)}
+                    >
+                        <ChevronDown className={cn("size-4 transition-transform", collapsed ? "" : "rotate-180")} />
+                    </button>
+                </div>
+                {!collapsed ? (
+                    <div className="mt-2 space-y-2 text-xs leading-5" style={{ color: theme.node.text }}>
+                        {isConnected ? (
+                            <p className="opacity-70">Codex / Claude Code 等 Agent 已通过 MCP 接入，可直接在本画布执行操作。</p>
+                        ) : (
+                            <>
+                                <p className="opacity-80">
+                                    在终端运行{" "}
+                                    <code className="rounded px-1 py-0.5 font-mono text-[0.85em]" style={{ background: theme.toolbar.itemHover }}>
+                                        npx -y @tigerowo/infinite-canvas-agent
+                                    </code>
+                                    ，复制输出的 Local URL 与 Connect token，然后访问画布链接并追加{" "}
+                                    <code className="rounded px-1 py-0.5 font-mono text-[0.85em]" style={{ background: theme.toolbar.itemHover }}>
+                                        {queryExample}
+                                    </code>
+                                    ，即可让 Codex / Claude Code 等 Agent 通过 MCP 操作本画布。本地 Agent 默认监听 127.0.0.1:17371，token 也会写入 ~/.infinite-canvas/canvas-agent.json。
+                                </p>
+                                <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 transition"
+                                    style={{ background: theme.toolbar.itemHover, color: theme.node.text }}
+                                    onClick={copyExampleLink}
+                                >
+                                    {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                                    {copied ? "已复制" : "拷贝示例链接"}
+                                </button>
+                            </>
+                        )}
+                    </div>
+                ) : null}
+            </div>
+        </div>
     );
 }
 

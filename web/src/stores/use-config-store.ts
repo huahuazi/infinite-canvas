@@ -15,6 +15,8 @@ export type LocalModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    script?: string;
+    scriptCapability?: ModelCapability;
 };
 
 export type VideoMultiPromptItem = { prompt: string; duration: string };
@@ -66,6 +68,8 @@ export type AiConfig = {
     size: string;
     videoSize: string;
     count: string;
+    background?: string;
+    reasoningEffort?: "auto" | "low" | "medium" | "high" | "xhigh";
     canvasImageCount: string;
     timeout: string;
     apiMode: string;
@@ -139,6 +143,8 @@ export const defaultConfig: AiConfig = {
     size: "1:1",
     videoSize: "1280x720",
     count: "1",
+    background: "",
+    reasoningEffort: "auto",
     canvasImageCount: "1",
     timeout: "600",
     apiMode: "images",
@@ -435,6 +441,8 @@ export const useConfigStore = create<ConfigStore>()(
                         videoWatermark: config.videoWatermark || "false",
                         videoCharacterOrientation: config.videoCharacterOrientation === "image" ? "image" : "video",
                         canvasImageCount: config.canvasImageCount || "1",
+                        background: config.background || "",
+                        reasoningEffort: config.reasoningEffort || "auto",
                         imageModels: filterChannelModelsByCapability(localChannels, "image"),
                         videoModels: filterChannelModelsByCapability(localChannels, "video"),
                         textModels: filterChannelModelsByCapability(localChannels, "text"),
@@ -497,6 +505,8 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",
         models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
+        script: channel.script || undefined,
+        scriptCapability: channel.scriptCapability || undefined,
     }));
     if (!normalized.length) {
         normalized.push({ id: "local-default", protocol: "openai", name: "本地直连", baseUrl: config.baseUrl || defaultConfig.baseUrl, apiKey: config.apiKey || "", models: Array.isArray(config.models) ? config.models.filter(Boolean) : [] });

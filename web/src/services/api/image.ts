@@ -224,6 +224,7 @@ function applyImageGenerationParams(body: Record<string, unknown>, config: AiCon
 
 function applyImageGenerationOptions(body: Record<string, unknown>, config: AiConfig, params: ImageRequestParams) {
     if (isZhipuImageModel(config.model)) return;
+    if (config.background === "transparent") body.background = "transparent";
     if (params.n > 1) body.n = params.n;
     if (config.responseFormatB64Json) body.response_format = "b64_json";
     if (config.streamImages) {
@@ -1176,6 +1177,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
                 model: config.model,
                 messages: withSystemMessage(config, messages),
                 stream: true,
+                ...(config.reasoningEffort && config.reasoningEffort !== "auto" ? { reasoning_effort: config.reasoningEffort } : {}),
             },
             {
                 headers: {

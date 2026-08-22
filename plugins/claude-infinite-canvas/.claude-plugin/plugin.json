@@ -1,0 +1,13 @@
+{
+  "name": "infinite-canvas",
+  "version": "0.1.0",
+  "description": "通过本地无限画布 Agent 的 MCP 服务，让 Claude Code 读取并操作无限画布（Infinite Canvas）网页画布。",
+  "author": {
+    "name": "tigerowo",
+    "url": "https://github.com/tigerowo/infinite-canvas"
+  },
+  "license": "MIT",
+  "mcp": {
+    "config": ".mcp.json"
+  }
+}
