@@ -1,0 +1,20 @@
+# 本地 Agent 服务镜像：为画布提供 MCP over HTTP，供 Codex / Claude 远程连接。
+FROM node:22-bookworm-slim
+
+RUN sed -i 's#deb.debian.org#mirrors.aliyun.com#g' /etc/apt/sources.list.d/debian.sources
+WORKDIR /app
+
+COPY agent/package.json agent/package-lock.json ./
+RUN npm config set registry https://registry.npmmirror.com && npm install
+
+COPY agent/tsconfig.json ./
+COPY agent/src ./src
+COPY agent/agent-instructions.md ./agent-instructions.md
+RUN npm run build
+
+ENV NODE_ENV=production
+ENV AGENT_HOST=0.0.0.0
+ENV PORT=17371
+EXPOSE 17371
+
+CMD ["node", "dist/index.js"]

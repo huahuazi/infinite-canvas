@@ -8,7 +8,23 @@ export const CONFIG_DIR = path.join(os.homedir(), ".infinite-canvas");
 export const CONFIG_FILE = path.join(CONFIG_DIR, "canvas-agent.json");
 export const VERSION = readPackageVersion();
 export const DEFAULT_ADAPTER = "codex";
-export const AGENT_PROMPT = fs.readFileSync(new URL("../agent-instructions.md", import.meta.url), "utf8");
+
+/** 读取 Agent 指令：优先随包路径，其次可执行文件同目录（bun 单文件产物场景）。 */
+function loadAgentPrompt(): string {
+    const candidates = [
+        new URL("../agent-instructions.md", import.meta.url),
+        path.join(path.dirname(process.execPath), "agent-instructions.md"),
+    ];
+    for (const candidate of candidates) {
+        try {
+            return fs.readFileSync(candidate, "utf8");
+        } catch {
+            // 尝试下一个候选路径
+        }
+    }
+    throw new Error("agent-instructions.md 缺失，请确认与程序放在同一目录");
+}
+export const AGENT_PROMPT = loadAgentPrompt();
 
 export type CanvasAgentConfig = { url: string; token: string; origins?: string[]; adapter?: string };
 

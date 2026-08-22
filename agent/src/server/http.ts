@@ -1,19 +1,27 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import crypto from "node:crypto";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { adapterRegistry } from "../adapters/registry.js";
 import { canvasSession } from "../canvas/session.js";
 import { DEFAULT_PORT, loadConfig, saveConfig, VERSION, type CanvasAgentConfig } from "../config.js";
 import type { AgentEmit, AgentPermissionMode } from "../codex/types.js";
+import { createMcpServer, toolRegistry } from "./mcp.js";
 import { logger } from "../utils/logger.js";
 
 const PROTOCOL_VERSION = "3";
 
-/** 启动仅监听本机的 Agent HTTP 服务。 */
+/** 启动 Agent HTTP 服务；默认仅监听本机，设置 AGENT_HOST=0.0.0.0 可对外提供（供服务器部署模式）。 */
 export function startHttpServer() {
     const config = loadConfig(true);
     const port = Number(process.env.PORT) || Number(new URL(config.url).port) || DEFAULT_PORT;
-    config.url = `http://127.0.0.1:${port}`;
+    const host = process.env.AGENT_HOST || "127.0.0.1";
+    config.url = `http://${host}:${port}`;
     saveConfig(config);
+
+    /** MCP over HTTP（Streamable HTTP），供 Codex / Claude 等远程连接服务器上的画布。 */
+    toolRegistry.start(config);
+    const mcpTransports = new Map<string, StreamableHTTPServerTransport>();
 
     /** 首个 SSE 连接的 clientId 作为后续画布请求的默认回退，保证浏览器完整闭环。 */
     let sseClientId = "";
@@ -53,6 +61,28 @@ export function startHttpServer() {
     app.use((req, res, next) => {
         if (validToken(req, config.token)) return next();
         res.status(401).json({ ok: false, error: "invalid token" });
+    });
+
+    // ---- MCP over HTTP（Codex / Claude 远程连接入口，地址形如 /mcp） ----
+    app.post("/mcp", route(async (req, res) => {
+        const sessionId = String(req.headers["mcp-session-id"] || "");
+        const existing = sessionId ? mcpTransports.get(sessionId) : undefined;
+        if (existing) {
+            await existing.handleRequest(req, res, req.body);
+            return;
+        }
+        const server = createMcpServer(config);
+        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+        const transportId = transport.sessionId || "";
+        if (transportId) mcpTransports.set(transportId, transport);
+    }));
+    app.get("/mcp", (req, res) => {
+        const sessionId = String(req.headers["mcp-session-id"] || "");
+        const transport = sessionId ? mcpTransports.get(sessionId) : undefined;
+        if (transport) void transport.handleRequest(req, res);
+        else res.status(404).json({ ok: false, error: "MCP session not found" });
     });
 
     // ---- 浏览器连接 ----
@@ -159,12 +189,13 @@ export function startHttpServer() {
         res.status(500).json({ ok: false, error: error.message });
     });
 
-    app.listen(port, "127.0.0.1", () => {
+    app.listen(port, host, () => {
         console.log("Infinite Canvas Agent");
         console.log(`Local URL: ${config.url}`);
         console.log(`Connect token: ${config.token}`);
+        console.log(`MCP over HTTP: ${config.url}/mcp`);
         console.log(`Default adapter: ${adapterRegistry.defaultId()}`);
-        console.log("MCP 模式使用: infinite-canvas-agent mcp");
+        console.log("MCP stdio 模式使用: infinite-canvas-agent mcp");
         if (logger.enabled) console.log(`Debug log: ${logger.filePath}`);
     });
 }

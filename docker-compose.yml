@@ -1,10 +1,9 @@
 services:
   app:
-    image: ghcr.io/tigerowo/infinite-canvas:latest
+    image: local/infinite-canvas
     build:
       context: .
       dockerfile: Dockerfile
-    pull_policy: always
     container_name: infinite-canvas
     env_file:
       - .env
@@ -12,4 +11,17 @@ services:
       - ./data:/app/data
     ports:
       - "3000:3000"
+    restart: unless-stopped
+
+  agent:
+    image: local/infinite-canvas-agent
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: infinite-canvas-agent
+    environment:
+      - AGENT_HOST=0.0.0.0
+      - PORT=17371
+    ports:
+      - "17371:17371"
     restart: unless-stopped
