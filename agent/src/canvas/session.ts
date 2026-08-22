@@ -37,7 +37,7 @@ export class CanvasSession {
     private activeClientId = "";
     private toolTimeoutMs = DEFAULT_TOOL_TIMEOUT_MS;
 
-    /** 注册 SSE 连接。 */
+    /** 注册 SSE 连接。最新连接的客户端自动成为工具执行目标，保证页面刷新/重连后立即恢复可用。 */
     openEvents(clientId: string, res: Response) {
         this.clients.set(clientId, res);
         res.setHeader("Content-Type", "text/event-stream");
@@ -46,9 +46,20 @@ export class CanvasSession {
         res.setHeader("X-Accel-Buffering", "no");
         res.flushHeaders?.();
         res.write(`event: ready\ndata: {"clientId":"${clientId}"}\n\n`);
-        res.on("close", () => this.clients.delete(clientId));
-        logger.info("Canvas client connected", { clientId, total: this.clients.size });
-        if (!this.activeClientId) this.activeClientId = clientId;
+        res.on("close", () => {
+            this.clients.delete(clientId);
+            // 执行目标断开时，切换到仍在线的任一客户端，避免工具调用打到已断开的连接。
+            if (this.activeClientId === clientId) this.activateNextOnlineClient();
+        });
+        this.activeClientId = clientId;
+        logger.info("Canvas client connected", { clientId, total: this.clients.size, active: this.activeClientId });
+    }
+
+    /** 将执行目标切换到任一在线客户端；无在线客户端时清空。 */
+    private activateNextOnlineClient() {
+        const next = this.clients.keys().next();
+        if (!next.done && next.value) this.activeClientId = next.value;
+        else this.activeClientId = "";
     }
 
     /** 更新某个客户端的画布状态与工具 schema。 */

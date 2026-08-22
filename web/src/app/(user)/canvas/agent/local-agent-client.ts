@@ -75,7 +75,8 @@ export class LocalAgentClient {
             this.setStatus({ state: "connected", message: "已连接 Agent", adapter: this.adapter || undefined, mode: this.mode });
             this.reportState();
             this.stateTimer = setInterval(() => this.reportState(), 2000);
-            void this.post("/canvas/activate", {});
+            // 显式激活本页面为工具执行目标（多标签/重连场景第一时间生效）。
+            void this.post(`/canvas/activate?clientId=${encodeURIComponent(this.clientId)}`, {});
         });
         this.source.addEventListener("tool_call", (event) => {
             void this.handleToolCall(event as MessageEvent<string>);
