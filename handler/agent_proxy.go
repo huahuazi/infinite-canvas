@@ -26,7 +26,12 @@ func init() {
 			pr.Out.URL.Scheme = parsed.Scheme
 			pr.Out.URL.Host = parsed.Host
 			// 去掉 /api/agent 前缀，转发到 agent 服务的原生路由（/events、/mcp、/api/tools 等）。
-			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.Out.URL.Path, "/api/agent")
+			// 注意：前缀本身以 / 开头，剩余路径也已保留 / 前缀，直接 TrimPrefix 即可。
+			path := strings.TrimPrefix(pr.Out.URL.Path, "/api/agent")
+			if path == "" {
+				path = "/"
+			}
+			pr.Out.URL.Path = path
 		},
 	}
 	agentToken := os.Getenv("AGENT_TOKEN")
