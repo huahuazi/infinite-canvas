@@ -11,6 +11,32 @@
 
 两种模式读取同一份本地配置，因此接入时无需手动传递 token。
 
+## 两种接入形态
+
+### 形态一：本地模式（本机运行，个人使用）
+
+`agent` 跑在你自己电脑上，浏览器画布（无论本地还是服务器部署）通过本机 `127.0.0.1:17371` 与它通信。适合个人电脑上使用：
+
+```bash
+cd agent && npm install && npm run build && npm link   # 首次安装
+infinite-canvas-agent                                    # 启动
+```
+
+### 形态二：服务器集中模式（部署跟随画布，用户零安装）
+
+`agent` 随 docker-compose 一并部署在服务器上（容器 `infinite-canvas-agent`，对外端口 `17371`）。Codex / Claude 直接远程连接服务器的 MCP 地址，**任何人都无需在本地安装任何东西**：
+
+```bash
+# Codex（远程 HTTP MCP）
+codex mcp add infinite-canvas --transport http http://<服务器IP>:17371/mcp
+# Claude Code（远程 HTTP MCP）
+claude mcp add infinite-canvas --transport http http://<服务器IP>:17371/mcp
+```
+
+浏览器侧连接：打开画布链接时追加 `?agentUrl=http://<服务器IP>:17371&agentToken=<token>`（token 在服务器 `docker exec infinite-canvas-agent cat /root/.infinite-canvas/canvas-agent.json` 中查看；多用户场景下建议运维方自行管理 token）。
+
+> 部署注意事项：服务器需在云安全组放行 TCP `17371`；agent 容器默认 `AGENT_HOST=0.0.0.0` 对外监听（生产环境请自行评估鉴权策略）。
+
 ## 画布能力
 
 MCP 侧可用的核心工具：
