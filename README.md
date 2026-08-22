@@ -80,32 +80,32 @@ docker compose -f docker-compose.local.yml up -d --build
 
 如需要拉取提示词，可前往 `http://localhost:3000/admin/prompts`。
 
-## 连接本地 Agent（Codex / Claude Code / Gemini ...）
+## 连接本地 Agent（让 AI 助手帮你操作画布）
 
-本地 Agent 服务源码在仓库 `agent/` 目录，默认监听 `127.0.0.1:17371`，token 写入 `~/.infinite-canvas/canvas-agent.json`。
+**这个功能是干嘛的**：让 Codex / Claude Code 这类终端 AI 助手能读取你的画布、添加节点、建立连线、触发图片视频生成。它通过一个跑在你本机的"中间人"小程序（`agent/` 目录，监听 `127.0.0.1:17371`）与浏览器里的画布传话。
 
-**安装（构建并注册本地命令，全局仅一次）**：
+**前提**：电脑已安装 Codex 或 Claude Code 命令行工具。没有的话跳过本节——网页内自带的"画布助手"已能完成对话、生图、插回画布的常用操作。
+
+**第一次使用（装一次中间人）**：
 
 ```bash
 cd agent
 npm install
 npm run build
-npm link        # 注册全局命令 infinite-canvas-agent
+npm link        # 之后可直接使用 infinite-canvas-agent 命令
 ```
 
-**启动本地 Agent 服务**：
+**每次使用（四步）**：
 
-```bash
-infinite-canvas-agent
-```
+1. 终端运行 `infinite-canvas-agent`，保持该终端不关闭（关闭即断线）
+2. 从输出中复制 `Connect token`（`Local URL` 固定为 `http://127.0.0.1:17371`，不用记）
+3. 浏览器打开画布链接并追加连接参数（把 `你的token` 换成上一步复制的内容）：
+   ```
+   http://localhost:3000/canvas?agentUrl=http://127.0.0.1:17371&agentToken=你的token
+   ```
+4. 画布右上角出现绿色"已连接本地 Agent"徽标即成功；对 AI 助手说"读一下当前画布"即可开始操作
 
-启动后复制输出的 `Local URL` 和 `Connect token`，访问画布链接时追加：
-
-```text
-http://localhost:3000/canvas?agentUrl=<Local URL>&agentToken=<Connect token>
-```
-
-然后按 Agent 类型安装 MCP 接入（任选其一）：
+**给 AI 助手装 MCP（一次性）**：
 
 ```bash
 # Codex
