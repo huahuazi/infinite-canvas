@@ -42,6 +42,10 @@ func New() *gin.Engine {
 	anonymousFiles.DELETE("/:id", func(c *gin.Context) {
 		handler.DeleteFile(c.Writer, c.Request, c.Param("id"))
 	})
+	// 本地 Agent 服务同源代理（/api/agent/* -> agent:17371），浏览器免 token 使用画布 Agent 能力。
+	api.POST("/agent/*path", gin.WrapF(handler.AgentProxy))
+	api.GET("/agent/*path", gin.WrapF(handler.AgentProxy))
+	api.OPTIONS("/agent/*path", gin.WrapF(handler.AgentProxy))
 	v1 := api.Group("/v1", middleware.UserAuth)
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	v1.POST("/images/edits", gin.WrapF(handler.AIImagesEdits))

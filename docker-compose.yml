@@ -22,6 +22,7 @@ services:
     environment:
       - AGENT_HOST=0.0.0.0
       - PORT=17371
+      - AGENT_TOKEN=${AGENT_TOKEN:-}
     ports:
       - "17371:17371"
     restart: unless-stopped

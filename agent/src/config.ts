@@ -28,12 +28,13 @@ export const AGENT_PROMPT = loadAgentPrompt();
 
 export type CanvasAgentConfig = { url: string; token: string; origins?: string[]; adapter?: string };
 
-/** 读取本地 Canvas Agent 配置，不存在时生成默认配置。 */
+/** 读取本地 Canvas Agent 配置，不存在时生成默认配置。AGENT_TOKEN 环境变量优先（服务器部署注入用）。 */
 export function loadConfig(create = false): CanvasAgentConfig {
     try {
-        return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")) as CanvasAgentConfig;
+        const config = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")) as CanvasAgentConfig;
+        return process.env.AGENT_TOKEN ? { ...config, token: process.env.AGENT_TOKEN } : config;
     } catch {
-        const config = { url: `http://127.0.0.1:${Number(process.env.PORT) || DEFAULT_PORT}`, token: crypto.randomBytes(18).toString("hex") };
+        const config = { url: `http://${process.env.AGENT_HOST || "127.0.0.1"}:${Number(process.env.PORT) || DEFAULT_PORT}`, token: process.env.AGENT_TOKEN || crypto.randomBytes(18).toString("hex") };
         if (create) saveConfig(config);
         return config;
     }
