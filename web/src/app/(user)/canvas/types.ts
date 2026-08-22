@@ -47,6 +47,7 @@ export type CanvasNodeMetadata = {
     channelId?: string;
     size?: string;
     quality?: string;
+    background?: string;
     count?: number;
     seconds?: string;
     vquality?: string;
