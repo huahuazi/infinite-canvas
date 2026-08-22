@@ -14,7 +14,7 @@
 macOS / Linux：
 
 ```bash
-git clone https://github.com/tigerowo/infinite-canvas.git
+git clone https://github.com/huahuazi/infinite-canvas.git
 cd infinite-canvas
 codex plugin marketplace add "$(pwd)/plugins/codex-infinite-canvas"
 codex plugin add infinite-canvas@infinite-canvas-codex  # 或安装命令返回的插件名

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## v0.6.0 - 2026-08-23
+
++ [新增] 新增本地 Agent 服务（agent/）：支持 Codex（完整 JSON-RPC 协议）、Claude Code、Gemini CLI 等通用命令行 Agent、OpenAI 兼容端点四类后端
++ [新增] 新增 MCP over HTTP 远程连接（/mcp 端点），Codex / Claude Code 可远程直连服务器画布
++ [新增] 新增画布 Agent 网页托管模式：后端同源反向代理（/api/agent/*），服务端注入 token，浏览器打开画布即自动连接，零配置
++ [新增] 新增 Codex / Claude Code / 通用 MCP 三套插件安装包（plugins/）
++ [新增] 图片生成新增透明背景开关（生成透明背景 PNG），配置节点与工作台均支持
++ [新增] 模型选择新增 Reasoning Effort 参数（auto/low/medium/high/xhigh）
++ [新增] 新增自定义调用脚本（本地直连渠道），可自由适配各类中转站与自建服务
++ [修复] 修复透明背景开关状态无法保持的问题（节点配置合并遗漏 background 字段）
++ [修复] 修复"拷贝示例链接"在 http 部署下无法复制的问题（剪贴板 API 降级）
++ [优化] 画布 Agent 连接徽标改为左下角展示，文案更易懂，不再遮挡顶部工具栏
++ [优化] 更新检查与文档链接指向本项目仓库
+
 ## v0.5.5 - 2026-08-21
 
 + [新增] 新增 MiniMax-H3 官方传参协议

@@ -3,23 +3,32 @@
   "version": "0.1.0",
   "description": "通过本地无限画布 Agent 的 MCP 服务，让 Codex 读取并操作无限画布（Infinite Canvas）网页画布。",
   "author": {
-    "name": "tigerowo",
-    "url": "https://github.com/tigerowo/infinite-canvas"
+    "name": "huahuazi",
+    "url": "https://github.com/huahuazi/infinite-canvas"
   },
-  "homepage": "https://github.com/tigerowo/infinite-canvas",
-  "repository": "https://github.com/tigerowo/infinite-canvas",
+  "homepage": "https://github.com/huahuazi/infinite-canvas",
+  "repository": "https://github.com/huahuazi/infinite-canvas",
   "license": "MIT",
-  "keywords": ["infinite-canvas", "canvas", "mcp", "agent"],
+  "keywords": [
+    "infinite-canvas",
+    "canvas",
+    "mcp",
+    "agent"
+  ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "无限画布",
     "shortDescription": "读取并操作当前无限画布网页画布。",
     "longDescription": "将 Codex 连接到本地无限画布 Agent 的 MCP 服务，使 Codex 可以读取当前画布节点、创建节点、连接生成流程，并通过网页画布二次确认机制触发图片、视频、音频生成。",
-    "developerName": "tigerowo",
+    "developerName": "huahuazi",
     "category": "Productivity",
-    "capabilities": ["Canvas", "MCP", "Creative Workflow"],
-    "websiteURL": "https://github.com/tigerowo/infinite-canvas",
+    "capabilities": [
+      "Canvas",
+      "MCP",
+      "Creative Workflow"
+    ],
+    "websiteURL": "https://github.com/huahuazi/infinite-canvas",
     "defaultPrompt": [
       "打开无限画布",
       "读取当前画布并总结节点结构",
