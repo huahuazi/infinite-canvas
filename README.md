@@ -5,7 +5,7 @@
 <h1 align="center">无限画布 (infinite-canvas)</h1>
 
 <p align="center">
-  <a href="https://github.com/tigerowo/infinite-canvas"><img src="https://img.shields.io/github/stars/tigerowo/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
+  <a href="https://github.com/huahuazi/infinite-canvas"><img src="https://img.shields.io/github/stars/huahuazi/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
   <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.5.5-2563eb?style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f97316?style=flat-square" alt="License"></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white" alt="Docker ready"></a>
@@ -13,86 +13,44 @@
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.25-00add8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
 </p>
 
-<p align="center">
-  <strong>Windows 本地安装包现已同步更新</strong><br>
-  <sub>无需从源码构建，下载即可本地运行</sub>
-</p>
+无限画布是一款面向图片、视频、音频的全能 AI 创作开源工作台。它把无限画布编排、AI 生图 / 生视频 / 生音频、参考图编辑、3D 导演台、全景图、画布 Agent、提示词库和素材沉淀放在同一个界面里，适合用来探索视觉方案并连续迭代图片结果。
 
-<p align="center">
-  <a href="https://github.com/tigerowo/infinite-canvas/releases/latest">
-    <img
-      src="https://img.shields.io/github/v/release/tigerowo/infinite-canvas?style=for-the-badge&logo=windows11&logoColor=white&label=Windows%20EXE&color=2563eb"
-      alt="下载 Windows EXE"
-    >
-  </a>
-</p>
-
-无限画布是一款面向图片，视频，音频，全能创作的开源工作台。它把画布编排、AI 图片、视频、音频生成、参考图编辑、对话助手、提示词库和素材沉淀放在同一个界面里，适合用来探索视觉方案并连续迭代图片结果
-
-## 赞助商
-
-<table>
-  <tr>
-    <td width="190" align="center">
-      <a href="https://metaso.cn/minimax-h3/?s=tt" target="_blank" rel="noopener"><img src="assets/metaso.png" width="163" alt="秘塔科技"></a>
-    </td>
-    <td>
-      <strong>MiniMax H3 视频生成 API｜秘塔科技</strong> 秘塔科技提供高性价比的 MiniMax H3 视频生成服务：<strong>768P 仅 0.09 元/秒，2K 仅 0.15 元/秒</strong>。支持原生 2K、音画同步，API 兼容 <strong>OpenAI 协议</strong>，同时支持 <strong>ComfyUI</strong>，无需自行部署 GPU。 🎁 通过 <a href="https://metaso.cn/minimax-h3/?s=tt" target="_blank" rel="noopener noreferrer">无限画布专属链接注册</a>，即可领取赠送额度及专属优惠。
-    </td>
-  </tr>
-</table>
-
-<p align="center">
-  <a href="https://metaso.cn/minimax-h3/?s=tt" target="_blank" rel="noopener"><img src="https://raw.githubusercontent.com/tigerowo/cdn-tdeh/v0.6/img/infinite-canvas/metaso.webp" alt="3D 导演台时间轴" /></a>
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/tigerowo/cdn-tdeh/v0.5/img/infinite-canvas/3ddirectortl.webp" alt="3D 导演台时间轴" />
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/tigerowo/cdn-tdeh/v0.4/img/infinite-canvas/3ddirector.webp" alt="3D 导演台" />
-</p>
-<p align="center">
-  <img src="https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.4/img/infinite-canvas/agent.webp" alt="Agent" />
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/tigerowo/cdn-tdeh/v0.4/img/infinite-canvas/panorama.webp" alt="全景图生成" />
-</p>
-
-本项目基于 [basketikun(纯前端)](https://github.com/basketikun/infinite-canvas) 为底，合并 [HuFakai](https://github.com/HuFakai/infinite-canvas) 生图增强版基础上，针对视频和视频生成逻辑配置更加完善，完善后端云同步机制，不再依赖纯前端
+本项目由 [basketikun(纯前端)](https://github.com/basketikun/infinite-canvas) 的无限画布演进而来，在保持画布创作体验的基础上，补齐了账号体系、云端同步、管理后台与本地 Agent 能力，形成一套可独立部署、多人使用的 AI 创作平台。
 
 > [!CAUTION]
-> 项目目前处于开发阶段，不保证历史数据兼容。各种数据库结构和存储格式都可能直接调整，欢迎关注后续更新
+> 项目目前处于开发阶段，不保证历史数据兼容。各种数据库结构和存储格式都可能直接调整。
 >
-> 如果你需要稳定维护自己的分支，建议自行 fork 后独立开发。二次开发与 PR 请保留原作者信息和前端页面标识
+> 二次开发与 PR 请保留原作者信息。
 
 ## 核心功能
 
-- 全景图：支持文字生成、参考图生成和本地 2:1 全景图导入，可作为导演台的场景环境背景
-- 导演台：在独立 3D 场景中布置角色、模型、全景环境和机位，支持镜头管理、截图，并将机位画面自动发送为连线图片节点
-- 摄像机控制：图片、视频和生成配置节点支持独立设置相机、镜头、焦距和光圈，将镜头参数自动写入生成提示词，并随节点保存和复制
-- 无限画布：多画布项目、节点拖拽缩放、连线、小地图、撤销重做、导入导出
-- AI 创作：支持 OpenAI 兼容接口的 Images API、Responses API、图生图、参考图编辑、流式接收、Base64 图片返回；Seedance 2.0 可通过火山方舟 Agent Plan 接入
-- 生图工作台：支持侧边/悬浮底部工作台、多任务并发、历史结果合并展示、分类管理、失败详情、参考图缩略图、图片体积展示和“我的素材”复用
-- 创作工作流：支持公开/个人模板、变量表单、AI 创建工作流、单图/多图系列工作流、参考图输入和结果自动进入生图历史
-- 画布助手：围绕选中节点和上游节点对话、生图，并把结果插回画布
-- 提示词库：抓取多个 GitHub 开源项目，按案例整理数百个图片提示词
-- 提示词与素材：提示词库、服务器素材库和“我的素材”可在生图、画布 AI 和工作流中复用
+- **无限画布**：多画布项目、节点拖拽缩放、连线、小地图、撤销重做、导入导出
+- **AI 创作**：支持 OpenAI 兼容接口的 Images API、Responses API、图生图、参考图编辑、流式接收、Base64 图片返回；Seedance 2.0 可通过火山方舟 Agent Plan 接入；同时支持 Gemini、MiniMax H3、Grok TTS 等渠道
+- **全景图**：支持文字生成、参考图生成和本地 2:1 全景图导入，可作为导演台的场景环境背景
+- **3D 导演台**：在独立 3D 场景中布置角色、模型、全景环境和机位，支持关键帧、时间轴、镜头管理、截图与 MP4 导出，并将机位画面自动发送为连线图片节点
+- **摄像机控制**：图片、视频和生成配置节点支持独立设置相机、镜头、焦距和光圈，将镜头参数自动写入生成提示词，并随节点保存和复制
+- **账号与云端同步**：画布、素材、生成记录和媒体文件可迁移到云端，多设备按时间戳合并；支持管理后台（渠道、AI 调用日志、提示词、素材管理）
+- **生图工作台**：支持侧边/悬浮底部工作台、多任务并发、历史结果合并展示、分类管理、失败详情与参考图缩略图
+- **创作工作流**：支持公开/个人模板、变量表单、AI 创建工作流、单图/多图系列工作流
+- **画布助手**：围绕选中节点和上游节点对话、生图，并把结果插回画布
+- **本地 Agent（本次二开新增）**：通过本地 `canvas-agent` 服务把画布连接到 Codex、Claude Code、Gemini 等任意 Agent，Agent 通过 MCP 工具读取节点、创建节点、整理流程并触发生成
+- **生成参数增强（本次二开新增）**：透明背景、Reasoning Effort、自定义调用脚本，灵活适配各类中转站与自建服务
+- **插件化 Agent 接入（本次二开新增）**：提供 Codex / Claude Code / 通用 MCP 三套安装包，一行命令接入
 
-完整功能说明见 [docs/features.md](docs/overview/features.md)
-
-如果你在为担心没有合适的生图API来发愁，可以查看该免费生图项目：[chatgpt2api](https://github.com/basketikun/chatgpt2api)
+完整功能说明见 [docs/overview/features.md](docs/overview/features.md)，Agent 接入见 [docs/agent-integration.md](docs/agent-integration.md)。
 
 ## 技术栈
 
 - 前端：Next.js、React、TypeScript、Tailwind CSS、Ant Design、Zustand、TanStack Query
 - 后端：Go、Gin、GORM
-- 存储：SQLite、本地 IndexedDB、S3 兼容对象存储、Cloudflare R2  
+- 本地 Agent 服务：TypeScript、Express、MCP SDK（`agent/` 目录）
+- 存储：SQLite、本地 IndexedDB、S3 兼容对象存储、Cloudflare R2
 - 部署：Docker
 
 ## 快速开始
 
 ```bash
-git clone https://github.com/tigerowo/infinite-canvas.git
+git clone https://github.com/huahuazi/infinite-canvas.git
 cd infinite-canvas
 cp .env.example .env
 # 修改默认账号密码等信息
@@ -100,6 +58,7 @@ docker compose up -d --build
 ```
 
 本地非 Docker 开发运行：
+
 ```bash
 cp .env.example .env
 go run .
@@ -117,9 +76,34 @@ cp .env.example .env
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
-运行后默认端口3000，可访问 `http://localhost:3000`
+运行后默认端口 3000，可访问 `http://localhost:3000`。
 
-如需要拉取提示词，可前往:`http://localhost:3000/admin/prompts`
+如需要拉取提示词，可前往 `http://localhost:3000/admin/prompts`。
+
+## 连接本地 Agent（Codex / Claude Code / Gemini ...）
+
+在终端启动本地 Agent 服务：
+
+```bash
+npx -y @tigerowo/infinite-canvas-agent
+```
+
+复制输出的 `Local URL` 和 `Connect token`，访问画布链接时追加：
+
+```text
+http://localhost:3000/canvas?agentUrl=<Local URL>&agentToken=<Connect token>
+```
+
+然后按 Agent 类型安装 MCP 接入（任选其一）：
+
+```bash
+# Codex
+codex mcp add infinite-canvas -- npx -y @tigerowo/infinite-canvas-agent mcp
+# Claude Code
+claude mcp add infinite-canvas -- npx -y @tigerowo/infinite-canvas-agent mcp
+```
+
+详细说明（含 Gemini CLI、Cursor 与插件安装方式）见 [docs/agent-integration.md](docs/agent-integration.md)。
 
 ## New API 自动配置
 
@@ -152,11 +136,7 @@ https://infinite-canvas-cpco.onrender.com?apiKey={key}&baseUrl={address}
     <td width="50%"><img src="https://i.ibb.co/5g46rH3L/2.png" alt="image" border="0"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="https://i.ibb.co/NfHpv5q/3.png" alt="image" border="0"></td>
-    <td width="50%"><img src="https://i.ibb.co/svXg7dPp/4.png" alt="image" border="0"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="https://cdn3.ldstatic.com/original/4X/8/6/7/867532c5c6dfff38cfa2b90ca0e0f76809b066d4.png" alt="5" border="0"></td>
+    <td width="50%"><img src="https://cdn3.ldstatic.com/original/4X/8/6/7/867532c5c6dfff38cfa2b90ca0e0f76809b066d4.png" alt="image" border="0"></td>
     <td width="50%"><img src="https://i.ibb.co/BHjjXcV4/6.png" alt="image" border="0"></td>
   </tr>
 </table>
@@ -164,36 +144,14 @@ https://infinite-canvas-cpco.onrender.com?apiKey={key}&baseUrl={address}
 ## 文档
 
 - [功能介绍](docs/overview/features.md)
+- [Agent 接入文档](docs/agent-integration.md)
 - [部署说明](docs/overview/docker.md)
 - [画布节点操作手册](docs/canvas/canvas-node-manual.md)
 - [画布快捷键](docs/canvas/canvas-shortcuts.md)
-- [待办事项](docs/progress/todo.md)
 - [后端数据库说明](docs/backend/backend-database.md)
 - [系统配置数据结构](docs/backend/system-settings.md)
 - [接口响应约定](docs/backend/api-response.md)
 
-## 赞助支持
-
-<div align="center">
-
-如果这个项目对你有帮助，欢迎赞助支持，你的每一份鼓励都是持续更新的动力！
-
-</div>
-
-## 社区支持
-
-学 AI，上 L 站：[LinuxDO](https://linux.do/)
-
 ## 开源协议
 
 本项目使用 MIT License，见 [LICENSE](LICENSE)。
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=tigerowo%2Finfinite-canvas&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=tigerowo/infinite-canvas&type=date&theme=dark&legend=top-left&sealed_token=SMYnxdZ99ogoiNPY5Qaeg1X9nB17KGpOCvv0Pzjz5mLCx5o7pNOpQNnYpk2CIUkdJMuAcxve8H_ZAYllKY4b7YTvZh0tiHoC8hGfknKnk2IUMYhQoIxgcQ" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=tigerowo/infinite-canvas&type=date&legend=top-left&sealed_token=SMYnxdZ99ogoiNPY5Qaeg1X9nB17KGpOCvv0Pzjz5mLCx5o7pNOpQNnYpk2CIUkdJMuAcxve8H_ZAYllKY4b7YTvZh0tiHoC8hGfknKnk2IUMYhQoIxgcQ" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=tigerowo/infinite-canvas&type=date&legend=top-left&sealed_token=SMYnxdZ99ogoiNPY5Qaeg1X9nB17KGpOCvv0Pzjz5mLCx5o7pNOpQNnYpk2CIUkdJMuAcxve8H_ZAYllKY4b7YTvZh0tiHoC8hGfknKnk2IUMYhQoIxgcQ" />
- </picture>
-</a>
