@@ -164,7 +164,7 @@ export function startHttpServer() {
         console.log(`Local URL: ${config.url}`);
         console.log(`Connect token: ${config.token}`);
         console.log(`Default adapter: ${adapterRegistry.defaultId()}`);
-        console.log("MCP 模式使用: npx -y @tigerowo/infinite-canvas-agent mcp");
+        console.log("MCP 模式使用: npx -y @huahuazi/infinite-canvas-agent mcp");
         if (logger.enabled) console.log(`Debug log: ${logger.filePath}`);
     });
 }

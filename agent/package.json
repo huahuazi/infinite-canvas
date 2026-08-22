@@ -1,5 +1,5 @@
 {
-    "name": "@tigerowo/infinite-canvas-agent",
+    "name": "@huahuazi/infinite-canvas-agent",
     "version": "0.1.0",
     "description": "Local Agent service for the Infinite Canvas workspace. Bridges the web canvas to Codex, Claude Code, generic CLI agents and OpenAI-compatible endpoints through MCP.",
     "type": "module",
