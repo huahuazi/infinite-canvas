@@ -10,7 +10,7 @@ description: 打开无限画布（Infinite Canvas）网页画布，并自动连�
 在终端启动本地 Agent 服务并保持运行：
 
 ```bash
-npx -y @huahuazi/infinite-canvas-agent
+infinite-canvas-agent
 ```
 
 ## 读取连接信息
@@ -44,6 +44,6 @@ http://localhost:3000/canvas?agentUrl=http://127.0.0.1:17371&agentToken=<Connect
 
 ## 说明
 
-- MCP 进程（`npx -y @huahuazi/infinite-canvas-agent mcp`）提供画布操作工具，本身不提供网页连接服务。
+- MCP 进程（`infinite-canvas-agent mcp`）提供画布操作工具，本身不提供网页连接服务。
 - 上面启动的本地 Agent 服务负责提供 `Local URL` 和 `Connect token`，两个进程读取同一份本地配置（`~/.infinite-canvas/canvas-agent.json`），因此连接信息可由 Agent 自行从命令输出中获取，不需要用户手动填写。
 - 打开失败时，优先检查本地 Agent 服务是否仍在运行，必要时重新启动后重试。

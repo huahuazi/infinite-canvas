@@ -545,7 +545,7 @@ function LocalAgentHint() {
                                 <p className="opacity-80">
                                     在终端运行{" "}
                                     <code className="rounded px-1 py-0.5 font-mono text-[0.85em]" style={{ background: theme.toolbar.itemHover }}>
-                                        npx -y @huahuazi/infinite-canvas-agent
+                                        infinite-canvas-agent
                                     </code>
                                     ，复制输出的 Local URL 与 Connect token，然后访问画布链接并追加{" "}
                                     <code className="rounded px-1 py-0.5 font-mono text-[0.85em]" style={{ background: theme.toolbar.itemHover }}>

@@ -2,13 +2,13 @@
 
 无限画布（Infinite Canvas）的本地 Agent 服务同时提供两种能力：
 
-- **HTTP 服务**（默认模式）：`npx -y @huahuazi/infinite-canvas-agent`，提供网页画布连接所需地址与 token
-- **MCP server**：`npx -y @huahuazi/infinite-canvas-agent mcp`，向 Agent 暴露画布操作工具
+- **HTTP 服务**（默认模式）：`infinite-canvas-agent`，提供网页画布连接所需地址与 token
+- **MCP server**：`infinite-canvas-agent mcp`，向 Agent 暴露画布操作工具
 
 任何支持 MCP 协议的 Agent（Codex、Claude Code、Gemini CLI、Cursor 等）都可以通过同一命令接入：
 
 ```bash
-npx -y @huahuazi/infinite-canvas-agent mcp
+infinite-canvas-agent mcp
 ```
 
 ## MCP 工具
@@ -25,17 +25,17 @@ npx -y @huahuazi/infinite-canvas-agent mcp
 
 | Agent | 注册命令 | 工具前缀 |
 | --- | --- | --- |
-| Codex | `codex mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp` | 直接为 `name`（如 `infinite-canvas_get_canvas_summary`）或无前缀 |
-| Claude Code | `claude mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp` | `mcp__infinite-canvas__get_canvas_summary` |
-| Gemini CLI | `gemini mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp` | `mcp__infinite-canvas__get_canvas_summary` |
-| Cursor | 设置 → MCP → Add → 选择 `command` 类型，填 `npx -y @huahuazi/infinite-canvas-agent mcp` | `mcp__infinite-canvas__get_canvas_summary` |
-| 其他支持 MCP 的 Agent | 使用各自 `mcp add`（或 `mcp --connect`）命令，命令体固定为 `npx -y @huahuazi/infinite-canvas-agent mcp` | 见各 Agent 文档 |
+| Codex | `codex mcp add infinite-canvas -- infinite-canvas-agent mcp` | 直接为 `name`（如 `infinite-canvas_get_canvas_summary`）或无前缀 |
+| Claude Code | `claude mcp add infinite-canvas -- infinite-canvas-agent mcp` | `mcp__infinite-canvas__get_canvas_summary` |
+| Gemini CLI | `gemini mcp add infinite-canvas -- infinite-canvas-agent mcp` | `mcp__infinite-canvas__get_canvas_summary` |
+| Cursor | 设置 → MCP → Add → 选择 `command` 类型，填 `infinite-canvas-agent mcp` | `mcp__infinite-canvas__get_canvas_summary` |
+| 其他支持 MCP 的 Agent | 使用各自 `mcp add`（或 `mcp --connect`）命令，命令体固定为 `infinite-canvas-agent mcp` | 见各 Agent 文档 |
 
 ## 注意事项
 
 1. **服务需先启动**：MCP 进程只提供画布工具，不提供网页连接服务。画布网页要能实际连接，需要先单独启动本地 Agent 服务并保持运行：
    ```bash
-   npx -y @huahuazi/infinite-canvas-agent
+   infinite-canvas-agent
    ```
    然后按网页提示在画布地址上追加 `?agentUrl=<Local URL>&agentToken=<Connect token>`。
 

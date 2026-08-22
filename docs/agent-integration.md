@@ -6,8 +6,8 @@
 
 | 模式 | 命令 | 作用 |
 | --- | --- | --- |
-| HTTP 服务 | `npx -y @huahuazi/infinite-canvas-agent` | 提供网页画布连接所需的 `Local URL`（默认 `http://127.0.0.1:17371`）与 `Connect token`，并把 token 写入 `~/.infinite-canvas/canvas-agent.json` |
-| MCP server | `npx -y @huahuazi/infinite-canvas-agent mcp` | 向 Agent 暴露画布操作工具 |
+| HTTP 服务 | `infinite-canvas-agent` | 提供网页画布连接所需的 `Local URL`（默认 `http://127.0.0.1:17371`）与 `Connect token`，并把 token 写入 `~/.infinite-canvas/canvas-agent.json` |
+| MCP server | `infinite-canvas-agent mcp` | 向 Agent 暴露画布操作工具 |
 
 两种模式读取同一份本地配置，因此接入时无需手动传递 token。
 
@@ -27,10 +27,10 @@ MCP 侧可用的核心工具：
 
 | Agent | 安装方式 | 能力 |
 | --- | --- | --- |
-| Codex | 插件：`codex plugin marketplace add ~` + `codex plugin add infinite-canvas`；或 `codex mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp` | 全量（线程/审批流/流式输出） |
-| Claude Code | `claude mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp`，可用 `.claude/agents/infinite-canvas.md` 定义 subagent | 中（流式输出 + 会话恢复） |
-| Gemini CLI | `gemini mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp` | 中 |
-| Cursor / 其他 | 设置 → MCP → Add → 命令填 `npx -y @huahuazi/infinite-canvas-agent mcp` | 中 |
+| Codex | 插件：`codex plugin marketplace add ~` + `codex plugin add infinite-canvas`；或 `codex mcp add infinite-canvas -- infinite-canvas-agent mcp` | 全量（线程/审批流/流式输出） |
+| Claude Code | `claude mcp add infinite-canvas -- infinite-canvas-agent mcp`，可用 `.claude/agents/infinite-canvas.md` 定义 subagent | 中（流式输出 + 会话恢复） |
+| Gemini CLI | `gemini mcp add infinite-canvas -- infinite-canvas-agent mcp` | 中 |
+| Cursor / 其他 | 设置 → MCP → Add → 命令填 `infinite-canvas-agent mcp` | 中 |
 
 说明：
 
@@ -40,15 +40,15 @@ MCP 侧可用的核心工具：
 
 ## 快速接入
 
-> npm 包尚未发布时，先把文中的 `npx -y @huahuazi/infinite-canvas-agent` 替换为本地构建后的入口：
-> `cd agent && npm install && npm run build && node dist/index.js`（MCP 命令同理为 `node <agent 路径>/dist/index.js mcp`）。
+> 首次使用前先在仓库 `agent/` 目录构建并注册本地命令（全局仅一次）：
+> `cd agent && npm install && npm run build && npm link`，之后即可直接使用 `infinite-canvas-agent` 命令。
 
 ```bash
 # 1. 启动本地 Agent 服务（保持运行，用于画布网页连接）
-npx -y @huahuazi/infinite-canvas-agent
+infinite-canvas-agent
 
 # 2. 给目标 Agent 注册 MCP（以 Claude Code 为例）
-claude mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp
+claude mcp add infinite-canvas -- infinite-canvas-agent mcp
 
 # 3. 打开画布网页（开发环境默认地址）
 #    http://localhost:3000/canvas?agentUrl=<Local URL>&agentToken=<Connect token>
@@ -67,7 +67,7 @@ curl http://127.0.0.1:17371/health
 ```
 
 - 返回正常（`ok`）：本地 Agent 服务在运行，问题在画布网页侧连接。
-- 无响应：服务未启动或端口被占用。重新运行 `npx -y @huahuazi/infinite-canvas-agent`，并确认 MCP 进程是独立于 HTTP 服务的第二个进程。
+- 无响应：服务未启动或端口被占用。重新运行 `infinite-canvas-agent`，并确认 MCP 进程是独立于 HTTP 服务的第二个进程。
 
 ### token 失效
 

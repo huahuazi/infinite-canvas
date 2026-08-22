@@ -14,7 +14,7 @@
 终端执行：
 
 ```bash
-claude mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp
+claude mcp add infinite-canvas -- infinite-canvas-agent mcp
 ```
 
 查看已注册的服务：
@@ -40,5 +40,5 @@ claude --plugin /Users/<你的用户名>/.../plugins/claude-infinite-canvas
 ## 前提
 
 - 需要 Node.js（用于 `npx`）
-- 本地 Agent 服务需已启动（`npx -y @huahuazi/infinite-canvas-agent`），画布网页需已打开并通过 URL 参数连接（`?agentUrl=<Local URL>&agentToken=<Connect token>`）
+- 本地 Agent 服务需已启动（`infinite-canvas-agent`），画布网页需已打开并通过 URL 参数连接（`?agentUrl=<Local URL>&agentToken=<Connect token>`）
 - 连接 token 由本地 Agent 自动写入 `~/.infinite-canvas/canvas-agent.json`，MCP 进程与网页共用同一份配置

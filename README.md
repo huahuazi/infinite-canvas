@@ -84,19 +84,19 @@ docker compose -f docker-compose.local.yml up -d --build
 
 本地 Agent 服务源码在仓库 `agent/` 目录，默认监听 `127.0.0.1:17371`，token 写入 `~/.infinite-canvas/canvas-agent.json`。
 
-**方式一（当前推荐）**：仓库内本地构建运行：
+**安装（构建并注册本地命令，全局仅一次）**：
 
 ```bash
 cd agent
 npm install
 npm run build
-node dist/index.js
+npm link        # 注册全局命令 infinite-canvas-agent
 ```
 
-**方式二（npm 包发布后）**：
+**启动本地 Agent 服务**：
 
 ```bash
-npx -y @huahuazi/infinite-canvas-agent
+infinite-canvas-agent
 ```
 
 启动后复制输出的 `Local URL` 和 `Connect token`，访问画布链接时追加：
@@ -105,13 +105,13 @@ npx -y @huahuazi/infinite-canvas-agent
 http://localhost:3000/canvas?agentUrl=<Local URL>&agentToken=<Connect token>
 ```
 
-然后按 Agent 类型安装 MCP 接入（任选其一；包未发布前将命令中的 `npx -y @huahuazi/infinite-canvas-agent` 替换为本地构建后的 `node <agent 仓库路径>/dist/index.js`）：
+然后按 Agent 类型安装 MCP 接入（任选其一）：
 
 ```bash
 # Codex
-codex mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp
+codex mcp add infinite-canvas -- infinite-canvas-agent mcp
 # Claude Code
-claude mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp
+claude mcp add infinite-canvas -- infinite-canvas-agent mcp
 ```
 
 也可以直接使用仓库自带的插件包，见 [plugins/](plugins/)：Codex 安装 `plugins/codex-infinite-canvas/`，Claude Code 安装 `plugins/claude-infinite-canvas/`。

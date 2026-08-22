@@ -23,7 +23,7 @@ codex plugin add infinite-canvas@infinite-canvas-codex  # 或安装命令返回�
 如果只想注册 MCP 服务，也可以直接使用：
 
 ```bash
-codex mcp add infinite-canvas -- npx -y @huahuazi/infinite-canvas-agent mcp
+codex mcp add infinite-canvas -- infinite-canvas-agent mcp
 ```
 
 Windows PowerShell 将 `$(pwd)` 替换为 `$PWD`，Windows CMD 替换为 `%cd%`。
@@ -38,7 +38,7 @@ Windows PowerShell 将 `$(pwd)` 替换为 `$PWD`，Windows CMD 替换为 `%cd%`�
 
 之后 Codex 会：
 
-1. 启动本地 Agent 服务 `npx -y @huahuazi/infinite-canvas-agent`
+1. 启动本地 Agent 服务 `infinite-canvas-agent`
 2. 从启动输出读取 `Local URL` 和 `Connect token`
 3. 打开画布地址 `http://localhost:3000/canvas?agentUrl=<Local URL>&agentToken=<Connect token>`
 4. 通过 `canvas` 技能使用 MCP 工具操作画布
