@@ -120,7 +120,9 @@ export class LocalAgentClient {
 
     private reportState() {
         const snapshot = this.options.getContext();
-        void this.post("/canvas/state", { snapshot, tools: CANVAS_AGENT_TOOLS });
+        // 必须带上本页 clientId：否则服务端回退到"首连客户端"，与执行目标 activeClientId 错位，
+        // 导致多标签/刷新后 hasCanvas() 恒为 false（MCP 报"没有已连接画布"）。
+        void this.post(`/canvas/state?clientId=${encodeURIComponent(this.clientId)}`, { snapshot, tools: CANVAS_AGENT_TOOLS });
     }
 
     private async post(path: string, body: unknown) {
