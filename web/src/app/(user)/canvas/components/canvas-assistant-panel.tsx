@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
     Check,
@@ -41,8 +41,9 @@ import {
     type CanvasAssistantSession,
     type CanvasNodeData,
 } from "../types";
-import { assistantReferenceContentFromNode } from "../utils/canvas-resource-references";
-import { AssistantReferenceChip, CanvasAssistantComposer } from "./canvas-assistant-composer";
+import { assistantReferenceContentFromNode, buildAllCanvasResourceReferences, type CanvasResourceReference } from "../utils/canvas-resource-references";
+import { assistantToPromptReference, CanvasAssistantComposer } from "./canvas-assistant-composer";
+import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 
 const PANEL_MOTION_MS = 500;
 const PANEL_MOTION_SECONDS = PANEL_MOTION_MS / 1000;
@@ -50,12 +51,12 @@ const PANEL_MOTION_SECONDS = PANEL_MOTION_MS / 1000;
 type CanvasAssistantPanelProps = {
     nodes: CanvasNodeData[];
     selectedNodeIds: Set<string>;
+    referenceNodeClick: { nodeId: string | null; version: number };
     sessions: CanvasAssistantSession[];
     activeSessionId: string | null;
     agentConfig: CanvasAgentConfig;
     width: number;
     onWidthChange: (width: number) => void;
-    onSelectNodeIds: (ids: Set<string>) => void;
     onSessionsChange: (sessions: CanvasAssistantSession[], activeSessionId: string | null) => void;
     onAgentConfigChange: (patch: Partial<CanvasAgentConfig>) => void;
     onPasteImage: (file: File) => void;
@@ -77,12 +78,12 @@ type PendingDeleteConfirmation = {
 export function CanvasAssistantPanel({
     nodes,
     selectedNodeIds,
+    referenceNodeClick,
     sessions,
     activeSessionId,
     agentConfig,
     width,
     onWidthChange,
-    onSelectNodeIds,
     onSessionsChange,
     onAgentConfigChange,
     onPasteImage,
@@ -103,6 +104,7 @@ export function CanvasAssistantPanel({
     const consumedInitialRequestRef = useRef<typeof initialRequest>(null);
     const pendingDeleteRef = useRef<PendingDeleteConfirmation | null>(null);
     const messageListRef = useRef<HTMLDivElement>(null);
+    const consumedReferenceNodeClickVersionRef = useRef(0);
     const [view, setView] = useState<"chat" | "history">("chat");
     const [prompt, setPrompt] = useState("");
     const [isRunning, setIsRunning] = useState(false);
@@ -110,6 +112,7 @@ export function CanvasAssistantPanel({
     const [deleteChatIds, setDeleteChatIds] = useState<string[]>([]);
     const [closing, setClosing] = useState(false);
     const [resizing, setResizing] = useState(false);
+    const [composerReferenceIds, setComposerReferenceIds] = useState<string[]>([]);
     const [removedReferenceIds, setRemovedReferenceIds] = useState<Set<string>>(new Set());
     const [pendingDelete, setPendingDelete] = useState<PendingDeleteConfirmation | null>(null);
     const [initialSession] = useState(createSession);
@@ -143,8 +146,22 @@ export function CanvasAssistantPanel({
         });
         return () => window.cancelAnimationFrame(frame);
     }, [messages, view]);
-    const allSelectedReferences = useMemo(() => buildAssistantReferences(nodes, selectedNodeIds), [nodes, selectedNodeIds]);
-    const selectedReferences = useMemo(() => allSelectedReferences.filter((item) => !removedReferenceIds.has(item.id)), [allSelectedReferences, removedReferenceIds]);
+    const resourceReferences = useMemo(() => buildAllCanvasResourceReferences(nodes), [nodes]);
+    const resourceReferenceById = useMemo(() => new Map(resourceReferences.map((reference) => [reference.nodeId, reference])), [resourceReferences]);
+    const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+    const resolveReferences = useCallback((ids: string[]) => ids.flatMap((id) => {
+        const node = nodeById.get(id);
+        const resource = resourceReferenceById.get(id);
+        const reference = node && resource ? nodeToReference(node, resource) : null;
+        return reference ? [reference] : [];
+    }), [nodeById, resourceReferenceById]);
+    const composerReferences = useMemo(() => resolveReferences(composerReferenceIds), [composerReferenceIds, resolveReferences]);
+    const pendingReferences = useMemo(() => {
+        const pendingClickNodeId = referenceNodeClick.version > consumedReferenceNodeClickVersionRef.current ? referenceNodeClick.nodeId : null;
+        return resourceReferences.filter(
+            (reference) => selectedNodeIds.has(reference.nodeId) && ((!composerReferenceIds.includes(reference.nodeId) && !removedReferenceIds.has(reference.nodeId)) || reference.nodeId === pendingClickNodeId),
+        );
+    }, [composerReferenceIds, referenceNodeClick, removedReferenceIds, resourceReferences, selectedNodeIds]);
     const iconButtonStyle = { color: theme.node.muted };
     const settleDeleteConfirmation = (confirmed: boolean) => {
         const pending = pendingDeleteRef.current;
@@ -220,13 +237,15 @@ export function CanvasAssistantPanel({
             commitSessions([session], session.id);
         }
 
-        const references = savedReferences || selectedReferences;
+        const references = savedReferences || composerReferences;
         const messageReferenceNodeIds = references.map((reference) => reference.id);
         const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, status: "success" };
         const assistantId = nanoid();
         appendMessage(session.id, userMessage);
         appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking", activity: "正在理解画布和创作目标" });
         setPrompt("");
+        setComposerReferenceIds([]);
+        setRemovedReferenceIds(new Set(selectedNodeIds));
 
         const requestConfig = {
             ...effectiveConfig,
@@ -314,10 +333,10 @@ export function CanvasAssistantPanel({
         void sendMessage(initialRequest.prompt, initialRequest.references);
     }, [initialRequest, onInitialRequestConsumed]);
 
-    const submit = async () => {
-        const text = prompt.trim();
+    const submit = async (nextPrompt = prompt, referenceIds = composerReferenceIds) => {
+        const text = nextPrompt.trim();
         if (!text || isRunning) return;
-        await sendMessage(text);
+        await sendMessage(text, resolveReferences(referenceIds));
     };
 
     const retryMessage = (message: CanvasAssistantMessage) => {
@@ -357,6 +376,7 @@ export function CanvasAssistantPanel({
             style={{ overflow: "clip", pointerEvents: closing ? "none" : undefined }}
         >
             <motion.aside
+                data-canvas-agent-panel
                 className="relative flex shrink-0 flex-col border-l"
                 initial={{ x: 48 }}
                 animate={{ x: closing ? 28 : 0 }}
@@ -448,10 +468,18 @@ export function CanvasAssistantPanel({
                         <CanvasAssistantComposer
                             prompt={prompt}
                             isRunning={isRunning}
-                            references={selectedReferences}
+                            references={composerReferences}
+                            availableReferences={resourceReferences}
+                            pendingReferences={pendingReferences}
                             agentConfig={agentConfig}
                             onAgentConfigChange={onAgentConfigChange}
                             onPromptChange={setPrompt}
+                            onReferenceIdsChange={(ids) => {
+                                consumedReferenceNodeClickVersionRef.current = referenceNodeClick.version;
+                                const removedSelectedIds = composerReferenceIds.filter((id) => selectedNodeIds.has(id) && !ids.includes(id));
+                                if (removedSelectedIds.length) setRemovedReferenceIds((previous) => new Set([...previous, ...removedSelectedIds]));
+                                setComposerReferenceIds(ids);
+                            }}
                             onSubmit={submit}
                             onStop={() => {
                                 settleDeleteConfirmation(false);
@@ -459,10 +487,6 @@ export function CanvasAssistantPanel({
                             }}
                             onOpenUpload={onOpenUpload}
                             onOpenAssets={onOpenAssets}
-                            onRemoveReference={(id) => {
-                                setRemovedReferenceIds((previous) => new Set(previous).add(id));
-                                if (selectedNodeIds.has(id)) onSelectNodeIds(new Set(Array.from(selectedNodeIds).filter((nodeId) => nodeId !== id)));
-                            }}
                             onPasteImage={onPasteImage}
                         />
                     </>
@@ -649,10 +673,9 @@ function AssistantMessages({ messages, onRetry }: { messages: CanvasAssistantMes
                                         Agent
                                     </div>
                                 ) : null}
-                                {message.role === "assistant" ? <AssistantMarkdown>{message.text}</AssistantMarkdown> : message.text}
+                                {message.role === "assistant" ? <AssistantMarkdown>{message.text}</AssistantMarkdown> : <UserMessageContent message={message} />}
                             </div>
                         ) : null}
-                        {message.references?.length ? <MessageReferences message={message} /> : null}
                         {running ? <ImageGenerationPending compact label={message.activity || "正在执行"} className="w-[250px] rounded-2xl border" /> : null}
                         {message.role === "assistant" && !running && message.text ? (
                             <Button shape="circle" size="small" style={{ borderColor: theme.node.stroke }} icon={<RotateCcw className="size-3.5" />} onClick={() => onRetry(message)} title="重试" />
@@ -697,26 +720,16 @@ function AssistantHistory({
     );
 }
 
-function MessageReferences({ message }: { message: CanvasAssistantMessage }) {
-    return (
-        <div className={cn("flex max-w-[88%] flex-wrap gap-2", message.role === "user" ? "justify-end" : "justify-start")}>
-            {message.references?.map((item) => <AssistantReferenceChip key={item.id} item={item} />)}
-        </div>
-    );
+function UserMessageContent({ message }: { message: CanvasAssistantMessage }) {
+    const references = useMemo(() => message.references?.map(assistantToPromptReference) || [], [message.references]);
+    return <CanvasPromptChipInput value={message.text} references={references} onChange={ignorePromptChange} readOnly />;
 }
 
-function nodeToReference(node: CanvasNodeData): CanvasAssistantReference | null {
+function ignorePromptChange() {}
+
+function nodeToReference(node: CanvasNodeData, resource: CanvasResourceReference): CanvasAssistantReference | null {
     const content = assistantReferenceContentFromNode(node);
-    return content ? { id: node.id, type: node.type, title: node.title, ...content } : null;
-}
-
-function buildAssistantReferences(nodes: CanvasNodeData[], selectedNodeIds: Set<string>) {
-    const nodeById = new Map(nodes.map((node) => [node.id, node]));
-    return Array.from(selectedNodeIds)
-        .map((id) => nodeById.get(id))
-        .filter((node): node is CanvasNodeData => Boolean(node))
-        .map(nodeToReference)
-        .filter((item): item is CanvasAssistantReference => Boolean(item));
+    return content ? { id: node.id, type: node.type, title: node.title, label: resource.label, ...content } : null;
 }
 
 function createSession(): CanvasAssistantSession {

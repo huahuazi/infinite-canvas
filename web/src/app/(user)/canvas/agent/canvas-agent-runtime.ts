@@ -179,15 +179,16 @@ async function executeActions(
 }
 
 function buildUserContent(text: string, references: CanvasAssistantReference[], modelName: string): CanvasAgentContent {
-    const referenceText = references.length ? "\n\n本次明确引用的真实节点：" + references.map((item) => item.id + "（" + item.title + "）").join("、") : "";
+    const referenceText = references.length
+        ? "\n\n本次输入中的节点占位与真实节点一一对应，请按占位分别理解和操作：" + references.map((item) => `${item.label || item.title} → 节点 ${item.id}（${item.title}）`).join("；")
+        : "";
+    const imageReferences = references.filter((item) => item.dataUrl && (/^data:image\//.test(item.dataUrl) || /^https?:\/\//.test(item.dataUrl)));
+    const imageOrderText = imageReferences.length ? "\n随消息附带的图片顺序：" + imageReferences.map((item, index) => `第 ${index + 1} 张 = ${item.label || item.title}`).join("；") : "";
     const images = supportsCanvasAgentImageInput(modelName)
-        ? references.flatMap((item) => {
-            const url = item.dataUrl;
-            return url && (/^data:image\//.test(url) || /^https?:\/\//.test(url)) ? [{ type: "image_url" as const, image_url: { url } }] : [];
-        })
+        ? imageReferences.map((item) => ({ type: "image_url" as const, image_url: { url: item.dataUrl as string } }))
         : [];
     if (!images.length) return text + referenceText;
-    return [{ type: "text", text: text + referenceText }, ...images];
+    return [{ type: "text", text: text + referenceText + imageOrderText }, ...images];
 }
 
 function supportsCanvasAgentImageInput(modelName: string) {
