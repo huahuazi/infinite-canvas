@@ -349,7 +349,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig | null>(null);
     const [initialAgentRequest, setInitialAgentRequest] = useState<{ prompt: CanvasPendingAgentRequest["prompt"]; references: CanvasAssistantReference[] } | null>(null);
     const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, k: 1 });
-    const [canvasTool, setCanvasTool] = useState<"select" | "pan">("select");
     const [size, setSize] = useState({ width: 1200, height: 720 });
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
     const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
@@ -3712,7 +3711,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 <InfiniteCanvas
                     containerRef={containerRef}
                     viewport={viewport}
-                    tool={canvasTool}
+                    tool="select"
                     backgroundMode={backgroundMode}
                     onViewportChange={(next) => {
                         setViewport(next);
@@ -3939,7 +3938,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
                 <CanvasToolbar
                     selectedCount={selectedNodeIds.size}
-                    canvasTool={canvasTool}
                     canUndo={historyState.canUndo}
                     canRedo={historyState.canRedo}
                     backgroundMode={backgroundMode}
@@ -3956,7 +3954,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onUpload={() => handleUploadRequest()}
                     onDelete={() => deleteNodes(new Set(selectedNodeIds))}
                     onClear={() => setClearConfirmOpen(true)}
-                    onCanvasToolChange={setCanvasTool}
                     onBackgroundModeChange={setBackgroundMode}
                     onShowImageInfoChange={setShowImageInfo}
                     onOpenAssetLibrary={() => {

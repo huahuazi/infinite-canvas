@@ -9,7 +9,6 @@ import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 
 export function CanvasToolbar({
     selectedCount,
-    canvasTool,
     canUndo,
     canRedo,
     backgroundMode,
@@ -26,14 +25,12 @@ export function CanvasToolbar({
     onUpload,
     onDelete,
     onClear,
-    onCanvasToolChange,
     onBackgroundModeChange,
     onShowImageInfoChange,
     onOpenAssetLibrary,
     onOpenMyAssets,
 }: {
     selectedCount: number;
-    canvasTool: "select" | "pan";
     canUndo: boolean;
     canRedo: boolean;
     backgroundMode: CanvasBackgroundMode;
@@ -50,7 +47,6 @@ export function CanvasToolbar({
     onUpload: () => void;
     onDelete: () => void;
     onClear: () => void;
-    onCanvasToolChange: (tool: "select" | "pan") => void;
     onBackgroundModeChange: (mode: CanvasBackgroundMode) => void;
     onShowImageInfoChange: (show: boolean) => void;
     onOpenAssetLibrary: () => void;
@@ -73,9 +69,6 @@ export function CanvasToolbar({
         <div className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: 300, right: 16 }}>
             {tip ? <DockTip label={tip} x={tipX} theme={theme} /> : null}
             <div ref={wrapRef} className="thin-scrollbar pointer-events-auto flex h-14 max-w-full items-center gap-1 overflow-x-auto rounded-xl border px-2 shadow-lg backdrop-blur [&>*]:shrink-0" style={dockStyle}>
-                <ToolbarButton id={`tool-${canvasTool}`} label={canvasTool === "select" ? "选择" : "移动"} active hovered={hovered} activeStyle={activeStyle} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={() => onCanvasToolChange(canvasTool === "select" ? "pan" : "select")}>
-                    {canvasTool === "select" ? <MousePointer2 className="size-4.5" /> : <Hand className="size-4.5" />}
-                </ToolbarButton>
                 <ToolbarButton id="tool-undo" label="撤销" disabled={!canUndo} hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUndo}>
                     <Undo2 className="size-4.5" />
                 </ToolbarButton>

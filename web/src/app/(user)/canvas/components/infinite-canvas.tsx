@@ -86,21 +86,33 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
 
-        const delta = -event.deltaY;
-        const factor = Math.pow(1.1, delta / 100);
-        const newScale = Math.min(Math.max(viewport.k * factor, 0.05), 5);
         const rect = containerRef.current?.getBoundingClientRect();
-        if (!rect) return;
 
-        const mouseX = event.clientX - rect.left;
-        const mouseY = event.clientY - rect.top;
-        const worldX = (mouseX - viewport.x) / viewport.k;
-        const worldY = (mouseY - viewport.y) / viewport.k;
+        // 双指捏合（macOS 触控板映射为 Ctrl+滚轮）或按住 Cmd/Ctrl 滚轮 -> 缩放，步长加大便于快速调到合适比例。
+        if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            const delta = -event.deltaY;
+            const factor = Math.pow(1.32, delta / 100);
+            const newScale = Math.min(Math.max(viewport.k * factor, 0.05), 5);
+            if (!rect) return;
+            const mouseX = event.clientX - rect.left;
+            const mouseY = event.clientY - rect.top;
+            const worldX = (mouseX - viewport.x) / viewport.k;
+            const worldY = (mouseY - viewport.y) / viewport.k;
+            onViewportChange({
+                x: mouseX - worldX * newScale,
+                y: mouseY - worldY * newScale,
+                k: newScale,
+            });
+            return;
+        }
 
+        // 普通滚轮 / 触控板双指滑动 -> 平移画布（与手机地图一致）。
+        event.preventDefault();
         onViewportChange({
-            x: mouseX - worldX * newScale,
-            y: mouseY - worldY * newScale,
-            k: newScale,
+            x: viewport.x - event.deltaX,
+            y: viewport.y - event.deltaY,
+            k: viewport.k,
         });
     };
 
