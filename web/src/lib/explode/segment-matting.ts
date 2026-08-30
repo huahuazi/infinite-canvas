@@ -71,11 +71,20 @@ async function loadMattingRunner(): Promise<((input: string | Blob) => Promise<{
             try {
                 const mod = await loadTransformers();
                 if (!mod.pipeline) throw new Error("transformers 未提供 pipeline");
-                const runner = await mod.pipeline("background-removal", model, {
+                // RMBG-1.4 / modnet 走 image-segmentation pipeline，返回 [{ mask, label, score }]
+                const segmenter = await mod.pipeline("image-segmentation", model, {
                     device: "wasm",
                     dtype: "fp32",
                 });
                 mattingError = null;
+                // 包装：把 segmentation 结果归一化为 { output: mask }
+                const runner = async (input: string | Blob) => {
+                    const result = await segmenter(input);
+                    const first = Array.isArray(result) ? result[0] : result;
+                    const mask = first?.mask ?? first?.output;
+                    if (!mask) return { output: null };
+                    return { output: mask };
+                };
                 return runner;
             } catch (error) {
                 lastError = error;
@@ -260,19 +269,19 @@ async function toMaskCanvas(output: { data?: Uint8ClampedArray; width?: number; 
 
 function normalizeMaskToRgba(data: Uint8ClampedArray, width: number, height: number): Uint8ClampedArray<ArrayBuffer> {
     const rgba = new Uint8ClampedArray(width * height * 4);
+    const channels = data.length / (width * height);
     for (let i = 0; i < width * height; i += 1) {
         let v = 0;
-        const idx = i * 4;
-        if (idx + 2 < data.length) {
-            // 已有 RGBA：取亮度作为 mask
-            v = Math.max(data[idx], data[idx + 1], data[idx + 2]);
-            if (data[idx + 3] !== undefined && data[idx + 3] !== 255) {
-                v = Math.max(v, data[idx + 3]);
-            }
-        } else if (idx + 1 < data.length) {
-            v = data[idx];
-        } else if (i < data.length) {
-            v = data[i];
+        const pixelOffset = i * channels;
+        if (channels >= 4) {
+            // RGBA：取 alpha 通道
+            v = data[pixelOffset + 3];
+        } else if (channels === 3) {
+            // RGB：取亮度
+            v = Math.max(data[pixelOffset], data[pixelOffset + 1], data[pixelOffset + 2]);
+        } else {
+            // 单通道：直接是 mask 值
+            v = data[pixelOffset];
         }
         const out = i * 4;
         rgba[out] = 255;

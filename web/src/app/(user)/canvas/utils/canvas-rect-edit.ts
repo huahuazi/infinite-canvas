@@ -36,40 +36,40 @@ export function buildMarkedReference(source: string, items: RectEditItem[], opti
 
             items.forEach((item, index) => {
                 const color = (options.regionColors || DEFAULT_REGION_COLORS)[index % (options.regionColors || DEFAULT_REGION_COLORS).length];
-                const rect = item.maskCanvas ? maskBoundsRect(item.maskCanvas) : normalizeRect(item.bbox!, options.width, options.height);
+                const hasMask = Boolean(item.maskCanvas && item.maskCanvas.width > 0);
 
-                // 区域高亮：优先涂抹 mask 形状，否则矩形填充
-                if (item.maskCanvas) {
-                    ctx.save();
-                    ctx.globalCompositeOperation = "source-over";
-                    // 用 mask 作为 alpha 通道填充色块
+                // 区域高亮：优先涂抹 mask 形状（半透明色，只覆盖涂抹像素），否则矩形
+                if (hasMask) {
+                    const maskCanvas = item.maskCanvas!;
+                    // mask 已与原图同尺寸；绘制半透明 tint，仅涂抹像素可见
                     const tint = document.createElement("canvas");
                     tint.width = options.width;
                     tint.height = options.height;
                     const tintCtx = tint.getContext("2d");
                     if (tintCtx) {
                         tintCtx.clearRect(0, 0, tint.width, tint.height);
-                        tintCtx.drawImage(item.maskCanvas, 0, 0, options.width, options.height);
+                        // 先用 mask 作为 alpha
+                        tintCtx.drawImage(maskCanvas, 0, 0, options.width, options.height);
                         tintCtx.globalCompositeOperation = "source-in";
-                        tintCtx.fillStyle = color;
+                        // 半透明填充（~40% 可见，让模型看到涂抹形状内部细节）
+                        tintCtx.fillStyle = hexWithAlpha(color, 0.42);
                         tintCtx.fillRect(0, 0, tint.width, tint.height);
                         ctx.drawImage(tint, 0, 0);
+                        // 沿涂抹形状边缘画细实线轮廓（替代包围盒虚线，避免模型改整个矩形）
+                        drawMaskOutline(ctx, maskCanvas, options.width, options.height, color);
                     }
-                    ctx.restore();
                 } else {
+                    const rect = normalizeRect(item.bbox!, options.width, options.height);
                     ctx.fillStyle = color + "33";
                     ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = Math.max(2, Math.round(Math.min(options.width, options.height) / 300));
+                    ctx.setLineDash([6, 5]);
+                    ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
                 }
 
-                // 边缘描边（mask 用包围盒，矩形用本身）
-                ctx.save();
-                ctx.strokeStyle = color;
-                ctx.lineWidth = Math.max(2, Math.round(Math.min(options.width, options.height) / 300));
-                ctx.setLineDash([ctx.lineWidth * 4, ctx.lineWidth * 3]);
-                ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-                ctx.restore();
-
-                // 编号角标
+                // 编号角标（用包围盒位置，方便看清编号）
+                const rect = hasMask ? maskBoundsRect(item.maskCanvas!) : normalizeRect(item.bbox!, options.width, options.height);
                 const label = String(index + 1);
                 ctx.save();
                 ctx.font = `bold ${Math.max(22, Math.round(Math.min(options.width, options.height) / 22))}px sans-serif`;
@@ -106,13 +106,15 @@ export function buildRectEditPrompt(items: RectEditItem[]): string {
         });
 
     const lines = [
-        "这是一张带有多个标记区域的图片，每个区域用不同颜色和编号标注。",
-        "请严格按编号逐一修改对应标记区域：",
+        "这是一张带有多个标记区域的图片，每个区域用不同颜色的半透明笔迹覆盖，并带编号。",
+        "请严格按编号逐一修改对应标记区域的内容：",
         ...regionLines,
         "要求：",
-        "- 只修改被标记的区域，区域之外保持原样，不改变整体构图、人物、光影和风格",
-        "- 编号和彩色框只是编辑标记，不要保留在最终图像中",
-        "- 修改内容与实际被标记的物体保持一致",
+        "- **只有被半透明彩色笔迹覆盖的像素区域才是修改目标**，笔迹之外（包括同一编号的虚线框内空白处）保持原样",
+        "- 笔迹形状即修改范围：沿笔迹形状边缘结束，不要扩散到整个矩形框",
+        "- 不要修改任何未标记区域，保持整体构图、人物、光影和风格不变",
+        "- 编号文字和彩色笔迹只是编辑标记，不要保留在最终图像中",
+        "- 修改内容要与被标记物体本身一致（材质、结构、颜色、风格），而不是凭空重画整个区域",
     ];
     return lines.join("\n");
 }
@@ -157,4 +159,49 @@ function maskBoundsRect(maskCanvas: HTMLCanvasElement): MattingRect {
 
 function clamp(value: number, min: number, max: number) {
     return Math.min(max, Math.max(min, value));
+}
+
+// hex 颜色 + alpha 透明度（0~1）→ rgba 字符串
+function hexWithAlpha(hex: string, alpha: number): string {
+    const value = hex.replace("#", "");
+    const r = parseInt(value.slice(0, 2), 16);
+    const g = parseInt(value.slice(2, 4), 16);
+    const b = parseInt(value.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// 沿涂抹 mask 边缘画细实线轮廓（替代包围盒虚线，让模型知道修改范围是笔迹形状本身）
+function drawMaskOutline(ctx: CanvasRenderingContext2D, maskCanvas: HTMLCanvasElement, targetWidth: number, targetHeight: number, color: string) {
+    const src = document.createElement("canvas");
+    src.width = maskCanvas.width;
+    src.height = maskCanvas.height;
+    const srcCtx = src.getContext("2d");
+    if (!srcCtx) return;
+    srcCtx.drawImage(maskCanvas, 0, 0);
+
+    // 缩放 mask 到目标尺寸后检测边缘
+    const scaled = document.createElement("canvas");
+    scaled.width = targetWidth;
+    scaled.height = targetHeight;
+    const scaledCtx = scaled.getContext("2d");
+    if (!scaledCtx) return;
+    scaledCtx.imageSmoothingEnabled = true;
+    scaledCtx.drawImage(src, 0, 0, targetWidth, targetHeight);
+
+    const data = scaledCtx.getImageData(0, 0, targetWidth, targetHeight).data;
+    const step = Math.max(1, Math.round(Math.max(targetWidth, targetHeight) / 900));
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, Math.round(Math.min(targetWidth, targetHeight) / 400));
+    ctx.beginPath();
+    for (let y = step; y < targetHeight - step; y += step) {
+        for (let x = step; x < targetWidth - step; x += step) {
+            const idx = (y * targetWidth + x) * 4 + 3;
+            if (data[idx] <= 8) continue;
+            const isEdge = data[((y - step) * targetWidth + x) * 4 + 3] <= 8 || data[((y + step) * targetWidth + x) * 4 + 3] <= 8 || data[(y * targetWidth + x - step) * 4 + 3] <= 8 || data[(y * targetWidth + x + step) * 4 + 3] <= 8;
+            if (isEdge) ctx.rect(x, y, step, step);
+        }
+    }
+    ctx.stroke();
+    ctx.restore();
 }

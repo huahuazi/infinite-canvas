@@ -89,13 +89,18 @@ export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: 
             if (!canvasHasPaint(item.canvas)) return;
             const isActive = item.id === activeId;
             const color = isActive ? "rgba(37, 99, 235, .45)" : regionColors[index % regionColors.length];
-            ctx.save();
-            ctx.fillStyle = color;
-            ctx.fillRect(0, 0, node.width, node.height);
-            ctx.globalCompositeOperation = "destination-in";
-            ctx.drawImage(item.canvas, 0, 0);
-            ctx.globalCompositeOperation = "source-over";
-            ctx.restore();
+            const layer = document.createElement("canvas");
+            layer.width = node.width;
+            layer.height = node.height;
+            const layerCtx = layer.getContext("2d");
+            if (!layerCtx) return;
+            // 独立层：先铺颜色，再用 mask 裁剪（不污染显示层的其它选区）
+            layerCtx.fillStyle = color;
+            layerCtx.fillRect(0, 0, layer.width, layer.height);
+            layerCtx.globalCompositeOperation = "destination-in";
+            layerCtx.drawImage(item.canvas, 0, 0);
+            // 叠加到显示层
+            ctx.drawImage(layer, 0, 0);
         });
     };
 
