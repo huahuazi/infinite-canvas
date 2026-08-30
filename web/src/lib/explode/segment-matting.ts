@@ -43,15 +43,29 @@ async function loadTransformers(): Promise<TransformersModule> {
     const url = CDN_URL;
     const mod = (await import(/* webpackIgnore: true */ url)) as TransformersModule;
     if (!mod?.pipeline) throw new Error("transformers 未提供 pipeline");
-    // 配置环境：走国内镜像 + 浏览器缓存
+    // 配置环境：走国内镜像；浏览器缓存仅在 localStorage 可用时才开启
+    //（隐私模式/禁用存储/嵌入环境 localStorage 不可用，强行开启会抛
+    //  "Browser cache is not available in this environment" 导致加载失败）
     const env = mod.env;
     if (env) {
         env.allowLocalModels = false;
         env.allowRemoteModels = true;
-        env.useBrowserCache = true;
+        env.useBrowserCache = canUseLocalStorage();
         env.remoteHost = "https://hf-mirror.com";
     }
     return mod;
+}
+
+// 探测 localStorage 是否可用（try/catch，某些环境直接抛 SecurityError）
+function canUseLocalStorage(): boolean {
+    try {
+        const key = "__transformer_cache_probe__";
+        window.localStorage.setItem(key, "1");
+        window.localStorage.removeItem(key);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 const MATTING_MODELS = ["briaai/RMBG-1.4", "Xenova/modnet"];
