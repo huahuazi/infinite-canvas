@@ -23,7 +23,6 @@ export type MattingOptions = {
 const DEFAULT_FEATHER = 2;
 const DEFAULT_MAX_EDGE = 2048;
 const CDN_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.1/dist/transformers.min.js";
-const MODEL_ID = "briaai/RMBG-1.4";
 
 type TransformersModule = {
     pipeline?: (task: string, model: string, options?: Record<string, unknown>) => Promise<(input: string | Blob) => Promise<{ output?: unknown }>>;
@@ -38,61 +37,54 @@ type TransformersModule = {
 
 let pipelinePromise: Promise<((input: string | Blob) => Promise<{ output?: unknown }>) | null> | null = null;
 
-function getWindow(): (Window & { transformers?: TransformersModule }) | null {
-    if (typeof window === "undefined") return null;
-    return window as Window & { transformers?: TransformersModule };
-}
-
-function loadScript(src: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
-        if (existing) {
-            existing.addEventListener("load", () => resolve(), { once: true });
-            existing.addEventListener("error", () => reject(new Error("模型脚本加载失败")), { once: true });
-            return;
-        }
-        const script = document.createElement("script");
-        script.src = src;
-        script.async = true;
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error("模型脚本加载失败"));
-        document.head.appendChild(script);
-    });
-}
-
+// 动态 import 加载浏览器版 transformers（ESM bundle）
+// 注意：必须用变量 URL 的 import()，Next/Turbopack 会保留为原生浏览器 import
 async function loadTransformers(): Promise<TransformersModule> {
-    const win = getWindow();
-    if (win?.transformers) return win.transformers;
-    await loadScript(CDN_URL);
-    const loaded = getWindow()?.transformers;
-    if (!loaded) throw new Error("transformers 未挂载到 window");
+    const url = CDN_URL;
+    const mod = (await import(/* webpackIgnore: true */ url)) as TransformersModule;
+    if (!mod?.pipeline) throw new Error("transformers 未提供 pipeline");
     // 配置环境：走国内镜像 + 浏览器缓存
-    const env = loaded.env;
+    const env = mod.env;
     if (env) {
         env.allowLocalModels = false;
         env.allowRemoteModels = true;
         env.useBrowserCache = true;
         env.remoteHost = "https://hf-mirror.com";
     }
-    return loaded;
+    return mod;
+}
+
+const MATTING_MODELS = ["briaai/RMBG-1.4", "Xenova/modnet"];
+
+// 记录加载失败原因，供 UI 提示
+let mattingError: string | null = null;
+export function getMattingError() {
+    return mattingError;
 }
 
 async function loadMattingRunner(): Promise<((input: string | Blob) => Promise<{ output?: unknown }>) | null> {
     if (pipelinePromise) return pipelinePromise;
 
     pipelinePromise = (async () => {
-        try {
-            const mod = await loadTransformers();
-            if (!mod.pipeline) throw new Error("transformers 未提供 pipeline");
-            const runner = await mod.pipeline("background-removal", MODEL_ID, {
-                device: "wasm",
-                dtype: "fp32",
-            });
-            return runner;
-        } catch (error) {
-            console.warn("[segment-matting] RMBG 模型加载失败，将降级为原图", error);
-            return null;
+        let lastError: unknown = null;
+        for (const model of MATTING_MODELS) {
+            try {
+                const mod = await loadTransformers();
+                if (!mod.pipeline) throw new Error("transformers 未提供 pipeline");
+                const runner = await mod.pipeline("background-removal", model, {
+                    device: "wasm",
+                    dtype: "fp32",
+                });
+                mattingError = null;
+                return runner;
+            } catch (error) {
+                lastError = error;
+                console.warn(`[segment-matting] 模型 ${model} 加载失败，尝试下一个`, error);
+            }
         }
+        mattingError = lastError instanceof Error ? lastError.message : "抠图模型加载失败";
+        console.error("[segment-matting] 全部抠图模型加载失败", lastError);
+        return null;
     })();
 
     return pipelinePromise;
@@ -109,7 +101,8 @@ export async function warmUpMatting() {
 export async function mattingDataUrl(source: string | Blob, options: MattingOptions = {}): Promise<string> {
     const runner = await loadMattingRunner();
     if (!runner) {
-        return cropFallback(source, options.rect);
+        const reason = mattingError || "抠图模型加载失败";
+        throw new Error(`本地抠图模型不可用（${reason}）`);
     }
 
     // 若用户提供了自由涂抹 mask，用其非空包围盒计算紧致 ROI（优于手动画框）
@@ -119,11 +112,11 @@ export async function mattingDataUrl(source: string | Blob, options: MattingOpti
     try {
         const result = await runner(roiUrl);
         const output = result?.output;
-        if (!output) return cropFallback(source, options.rect);
+        if (!output) throw new Error("抠图模型未返回有效结果");
         return await compositeMatting(roiUrl, output as { data?: Uint8ClampedArray; width?: number; height?: number }, mergedOptions);
     } catch (error) {
-        console.warn("[segment-matting] 抠图失败，降级", error);
-        return cropFallback(source, options.rect);
+        console.warn("[segment-matting] 抠图失败", error);
+        throw error instanceof Error ? error : new Error("抠图失败");
     }
 }
 
@@ -185,13 +178,13 @@ async function compositeMatting(roiUrl: string, output: { data?: Uint8ClampedArr
     const feather = options.feather ?? DEFAULT_FEATHER;
 
     const maskCanvas = await toMaskCanvas(output, width, height);
-    if (!maskCanvas) return roiUrl;
+    if (!maskCanvas) throw new Error("抠图 mask 解析失败");
 
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
-    if (!context) return roiUrl;
+    if (!context) throw new Error("抠图画布创建失败");
 
     context.drawImage(roiImage, 0, 0);
     context.save();

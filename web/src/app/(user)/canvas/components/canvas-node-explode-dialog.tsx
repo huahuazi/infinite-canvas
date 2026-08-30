@@ -18,7 +18,9 @@ export type CanvasImageExplodePayload = {
 
 type DrawMode = "paint" | "erase";
 const defaultBrushSize = 90;
-const maskFillColor = "rgba(37, 99, 235, .38)";
+
+// 每个选区一个颜色，便于区分
+const regionColors = ["rgba(37, 99, 235, .38)", "rgba(245, 130, 32, .38)", "rgba(226, 75, 74, .38)", "rgba(29, 158, 117, .38)", "rgba(153, 53, 86, .38)", "rgba(133, 79, 11, .38)", "rgba(24, 95, 165, .38)"];
 
 type MaskElement = {
     id: string;
@@ -53,14 +55,14 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
 
     const activeElement = elements.find((item) => item.id === activeId) || null;
 
-    // 切换激活元素 / 图片尺寸变化时，把该元素的涂抹 mask 实时渲染到显示层
+    // 切换激活元素 / 图片尺寸变化时，把所有选区的涂抹 mask 实时渲染到显示层
     useEffect(() => {
-        if (!open || !image || !activeElement) return;
+        if (!open || !image) return;
         const node = displayCanvasRef.current;
         if (!node) return;
         node.width = image.width;
         node.height = image.height;
-        renderPreview(activeElement.canvas, canvasHasPaint(activeElement.canvas));
+        renderAllMasks(true);
     }, [image, activeId, elements, open]);
 
     const addNewElement = () => {
@@ -89,17 +91,25 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
         setElements((prev) => prev.map((item) => (item.id === id ? { ...item, occludedToInpaint: !item.occludedToInpaint } : item)));
     };
 
-    const renderPreview = (maskCanvas: HTMLCanvasElement, withBorder = false) => {
+    // 将所有选区的涂抹 mask 叠加渲染到显示层，各自独立颜色，当前激活元素加白边高亮
+    const renderAllMasks = (highlightActive = false) => {
         const node = displayCanvasRef.current;
         const ctx = node?.getContext("2d");
         if (!node || !ctx) return;
         ctx.clearRect(0, 0, node.width, node.height);
-        ctx.fillStyle = maskFillColor;
-        ctx.fillRect(0, 0, node.width, node.height);
-        ctx.globalCompositeOperation = "destination-in";
-        ctx.drawImage(maskCanvas, 0, 0);
-        ctx.globalCompositeOperation = "source-over";
-        if (withBorder) drawDashedMaskBorder(ctx, maskCanvas);
+        elements.forEach((item, index) => {
+            if (!canvasHasPaint(item.canvas)) return;
+            const isActive = item.id === activeId;
+            const color = regionColors[index % regionColors.length];
+            ctx.save();
+            ctx.fillStyle = isActive ? "rgba(37, 99, 235, .45)" : color;
+            ctx.fillRect(0, 0, node.width, node.height);
+            ctx.globalCompositeOperation = "destination-in";
+            ctx.drawImage(item.canvas, 0, 0);
+            ctx.globalCompositeOperation = "source-over";
+            if (isActive && highlightActive) drawDashedMaskBorder(ctx, item.canvas);
+            ctx.restore();
+        });
     };
 
     const readCanvasPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -125,7 +135,7 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
         } else {
             drawMaskStroke(ctx, drawingRef.current.last, point, brushSize);
         }
-        renderPreview(element.canvas);
+        renderAllMasks(true);
         drawingRef.current.last = point;
     };
 
@@ -135,7 +145,7 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
         drawingRef.current = { active: true, last: null };
-        renderPreview(activeElement.canvas);
+        renderAllMasks(true);
         draw(event, activeElement);
     };
 
@@ -148,7 +158,7 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
     const stopDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
         if (!activeElement) return;
         drawingRef.current = { active: false, last: null };
-        renderPreview(activeElement.canvas, canvasHasPaint(activeElement.canvas));
+        renderAllMasks(true);
     };
 
     const runDetect = async () => {

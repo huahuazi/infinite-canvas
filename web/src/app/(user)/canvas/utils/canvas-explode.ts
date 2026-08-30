@@ -47,16 +47,29 @@ export async function explodeImageNode(request: ExplodeRequest): Promise<Explode
     let usedInpaint = false;
     let occludedCount = 0;
 
+    // 若全部元素为本地抠图，则只需在循环开始前确保模型可用，失败统一抛错
+    let mattingPreloadError: Error | null = null;
+
     for (let i = 0; i < elements.length; i += 1) {
         const element = elements[i];
         onProgress?.(`正在抠图 ${i + 1}/${elements.length}：${element.name}`);
 
         // 1) 本地 RMBG 像素级抠图（保真）
         //    有自由涂抹 mask 时，mask 包围盒优先作为 ROI；否则用 bbox
-        const dataUrl = await mattingDataUrl(source, {
-            ...(element.maskCanvas ? { maskCanvas: element.maskCanvas } : {}),
-            ...(element.bbox && !element.maskCanvas ? { rect: toPixelRect(element.bbox, request.naturalWidth, request.naturalHeight) } : {}),
-        });
+        let dataUrl: string;
+        try {
+            dataUrl = await mattingDataUrl(source, {
+                ...(element.maskCanvas ? { maskCanvas: element.maskCanvas } : {}),
+                ...(element.bbox && !element.maskCanvas ? { rect: toPixelRect(element.bbox, request.naturalWidth, request.naturalHeight) } : {}),
+            });
+        } catch (error) {
+            if (error instanceof Error && /模型|pipeline|抠图/.test(error.message) && !mattingPreloadError) {
+                mattingPreloadError = error;
+            }
+            // 单个元素失败不影响整体：记录错误并跳过该元素（不生成原图假结果）
+            console.warn(`[canvas-explode] 元素「${element.name}」抠图失败，跳过`, error);
+            continue;
+        }
 
         // 2) 检测缺口（该元素是否被遮挡）
         const occluded = await detectOcclusionFromSource(dataUrl);
@@ -104,6 +117,11 @@ export async function explodeImageNode(request: ExplodeRequest): Promise<Explode
         });
 
         onElementDone?.(i, element, { dataUrl: finalDataUrl, occluded });
+    }
+
+    // 若本地抠图模型全不可用且因此没有生成任何节点，向上抛错让 UI 明确提示
+    if (!childNodes.length && mattingPreloadError) {
+        throw new Error(`本地抠图模型不可用（${mattingPreloadError.message}），元素爆炸未能生成`);
     }
 
     return { childNodes, usedInpaint, occludedCount };
