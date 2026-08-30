@@ -77,7 +77,9 @@ import { CanvasNodeCropDialog, type CanvasImageCropRect } from "../components/ca
 import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "../components/canvas-node-mask-edit-dialog";
 import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "../components/canvas-node-split-dialog";
 import { CanvasNodeExplodeDialog, type CanvasImageExplodePayload } from "../components/canvas-node-explode-dialog";
-import { explodeImageNode } from "../utils/canvas-explode";
+import { CanvasNodeRectEditDialog, type CanvasRectEditPayload } from "../components/canvas-node-rect-edit-dialog";
+import { explodeImageNode as executeExplodeImageNode } from "../utils/canvas-explode";
+import { buildMarkedReference, buildRectEditPrompt } from "../utils/canvas-rect-edit";
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "../components/canvas-node-upscale-dialog";
 import { buildNodeChatMessages, buildNodeGenerationContext, buildNodeGenerationInputs, hydrateNodeGenerationContext, type NodeGenerationContext, type NodeGenerationInput } from "../components/canvas-node-generation";
 import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "../components/canvas-node-hover-toolbar";
@@ -439,6 +441,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [maskEditChannelId, setMaskEditChannelId] = useState("");
     const [splitNodeId, setSplitNodeId] = useState<string | null>(null);
     const [explodeNodeId, setExplodeNodeId] = useState<string | null>(null);
+    const [rectEditNodeId, setRectEditNodeId] = useState<string | null>(null);
     const [upscaleNodeId, setUpscaleNodeId] = useState<string | null>(null);
     const [superResolveNodeId, setSuperResolveNodeId] = useState<string | null>(null);
     const [angleNodeId, setAngleNodeId] = useState<string | null>(null);
@@ -898,6 +901,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const currentMaskEditChannelId = maskEditChannelId || maskEditConfig?.imageChannelId || "";
     const splitNode = splitNodeId ? nodeById.get(splitNodeId) || null : null;
     const explodeNode = explodeNodeId ? nodeById.get(explodeNodeId) || null : null;
+    const rectEditNode = rectEditNodeId ? nodeById.get(rectEditNodeId) || null : null;
     const upscaleNode = upscaleNodeId ? nodeById.get(upscaleNodeId) || null : null;
     const superResolveNode = superResolveNodeId ? nodeById.get(superResolveNodeId) || null : null;
     const angleNode = angleNodeId ? nodeById.get(angleNodeId) || null : null;
@@ -2528,7 +2532,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             try {
                 const naturalWidth = node.metadata.naturalWidth || node.width;
                 const naturalHeight = node.metadata.naturalHeight || node.height;
-                const result = await explodeImageNode({
+                const result = await executeExplodeImageNode({
                     source: node.metadata.content,
                     title: node.title,
                     elements: payload.elements,
@@ -2564,6 +2568,59 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             }
         },
         [effectiveConfig, message, projectId],
+    );
+
+    const rectEditImageNode = useCallback(
+        async (node: CanvasNodeData, payload: CanvasRectEditPayload) => {
+            if (!node.metadata?.content || !payload.items.length) return;
+            setRectEditNodeId(null);
+            const hideRectLoading = message.loading("正在框选修改...", 0);
+            const baseGenerationConfig = buildGenerationConfig(effectiveConfig, node, "image");
+            const generationConfig = { ...baseGenerationConfig, count: "1", size: node.metadata?.size || "auto" };
+            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+            const childId = nanoid();
+            const clientTaskId = `client_image_task_${childId}`;
+            const naturalWidth = node.metadata.naturalWidth || node.width;
+            const naturalHeight = node.metadata.naturalHeight || node.height;
+            try {
+                const markedReference = await buildMarkedReference(node.metadata.content, payload.items, {
+                    width: naturalWidth,
+                    height: naturalHeight,
+                });
+                const prompt = buildRectEditPrompt(payload.items);
+                const reference = { id: `${node.id}-rect-edit`, name: `image-${node.id}-rect-edit.png`, type: "image/png", dataUrl: markedReference };
+                const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [reference]);
+                const childNode: CanvasNodeData = {
+                    id: childId,
+                    type: CanvasNodeType.Image,
+                    title: "框选修改结果",
+                    position: { x: node.position.x + node.width + 96, y: node.position.y },
+                    width: node.width,
+                    height: node.height,
+                    metadata: { prompt, status: NODE_STATUS_LOADING, startedAt: Date.now(), progress: 0, imageTaskId: clientTaskId, ...generationMetadata },
+                };
+                setRunningNodeId(childId);
+                setNodes((prev) => [...prev, childNode]);
+                setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: childId }]);
+                setSelectedNodeIds(new Set([childId]));
+                setSelectedConnectionId(null);
+                setDialogNodeId(childId);
+                const task = await createCanvasImageTask(generationConfig, prompt, [reference], { nodeId: childId, sourceId: projectId, clientTaskId });
+                setNodes((prev) => applyCanvasImageTaskUpdate(prev, childId, task, childNode.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
+                setConnections((prev) => applyCanvasImageTaskConnections(prev, childId, task));
+            } catch (error) {
+                const errorDetails = error instanceof Error ? error.message : "框选修改失败";
+                message.error(errorDetails);
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+            } finally {
+                setRunningNodeId(null);
+                hideRectLoading();
+            }
+        },
+        [effectiveConfig, isAiConfigReady, message, openConfigDialog, projectId],
     );
 
     const maskEditImageNode = useCallback(
@@ -4541,6 +4598,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onCrop={(node) => setCropNodeId(node.id)}
                     onSplit={(node) => setSplitNodeId(node.id)}
                     onExplode={(node) => setExplodeNodeId(node.id)}
+                    onRectEdit={(node) => setRectEditNodeId(node.id)}
                     onUpscale={(node) => setUpscaleNodeId(node.id)}
                     onSuperResolve={(node) => setSuperResolveNodeId(node.id)}
                     onAngle={(node) => setAngleNodeId(node.id)}
@@ -4685,6 +4743,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         onClose={() => setExplodeNodeId(null)}
                         onConfirm={(payload) => void explodeImageNode(explodeNode!, payload)}
                     />
+                ) : null}
+
+                {rectEditNode?.metadata?.content ? (
+                    <CanvasNodeRectEditDialog dataUrl={rectEditNode.metadata.content} open={Boolean(rectEditNode)} onClose={() => setRectEditNodeId(null)} onConfirm={(payload) => void rectEditImageNode(rectEditNode!, payload)} />
                 ) : null}
 
                 {upscaleNode?.metadata?.content ? (

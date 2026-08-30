@@ -34,9 +34,15 @@ const DETECT_SYSTEM_PROMPT = [
     "- 只输出 JSON，不解释",
 ].join("\n");
 
-export async function detectElements(source: string | Blob, options: DetectOptions): Promise<DetectedElement[]> {
+export type DetectResult = {
+    elements: DetectedElement[];
+    error?: string;
+};
+
+export async function detectElements(source: string | Blob, options: DetectOptions): Promise<DetectResult> {
     try {
         const dataUrl = await imageToDataUrl({ dataUrl: toSourceUrl(source), url: typeof source === "string" ? toSourceUrl(source) : undefined });
+        if (!dataUrl) return { elements: [], error: "未能读取图片内容" };
         const config: AiConfig = { ...options.config, model: options.config.textModel || options.config.model };
         const turn = await requestCanvasAgentTurn({
             config,
@@ -53,10 +59,13 @@ export async function detectElements(source: string | Blob, options: DetectOptio
             tools: [],
             allowTools: false,
         });
-        return parseElementsJson(turn.content);
+        const elements = parseElementsJson(turn.content);
+        if (!elements.length) return { elements, error: "模型未返回可识别元素，可尝试手动框选" };
+        return { elements };
     } catch (error) {
         console.warn("[element-detector] AI 定位失败，将引导手动框选", error);
-        return [];
+        const message = error instanceof Error ? error.message : "元素识别失败";
+        return { elements: [], error: message };
     }
 }
 

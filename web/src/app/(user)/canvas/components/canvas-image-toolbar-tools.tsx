@@ -1,17 +1,18 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Bomb, Brush, Camera, Copy, FileText, Grid2x2, Lock, LockOpen, Maximize2, Scissors, Sparkles, Upload, ZoomIn } from "lucide-react";
+import { Bomb, Brush, Camera, Copy, Crop, FileText, Grid2x2, Lock, LockOpen, Maximize2, Scissors, Sparkles, Upload, ZoomIn } from "lucide-react";
 
 import type { CanvasNodeData } from "../types";
 
-export type ImageNodeActionToolId = "copyPrompt" | "reversePrompt" | "replace" | "resize" | "maskEdit" | "crop" | "split" | "explode" | "upscale" | "superResolve" | "angle" | "view";
+export type ImageNodeActionToolId = "copyPrompt" | "reversePrompt" | "replace" | "resize" | "maskEdit" | "rectEdit" | "crop" | "split" | "explode" | "upscale" | "superResolve" | "angle" | "view";
 export type ImageQuickToolId = "info" | "delete" | "saveAsset" | "download" | "edit" | ImageNodeActionToolId;
 
 export type ImageToolHandlers = {
     onUpload: (node: CanvasNodeData) => void;
     onToggleFreeResize: (node: CanvasNodeData) => void;
     onMaskEdit: (node: CanvasNodeData) => void;
+    onRectEdit: (node: CanvasNodeData) => void;
     onCrop: (node: CanvasNodeData) => void;
     onSplit: (node: CanvasNodeData) => void;
     onExplode: (node: CanvasNodeData) => void;
@@ -90,6 +91,15 @@ export const imageToolDefinitions: ImageToolDefinition[] = [
         title: "对图片进行局部修改",
         icon: () => <Brush className="size-4" />,
         run: (node, handlers) => handlers.onMaskEdit(node),
+    },
+    {
+        id: "rectEdit",
+        defaultVisible: true,
+        panelLabel: "框选修改",
+        label: "框选修改",
+        title: "框选多个区域，用文字描述 AI 修改",
+        icon: () => <Crop className="size-4" />,
+        run: (node, handlers) => handlers.onRectEdit(node),
     },
     {
         id: "crop",

@@ -30,6 +30,7 @@ type CanvasNodeHoverToolbarProps = {
     onUploadMediaToCloud: (node: CanvasNodeData) => void;
     onUploadImageToCloud: (node: CanvasNodeData) => void;
     onMaskEdit: (node: CanvasNodeData) => void;
+    onRectEdit: (node: CanvasNodeData) => void;
     onCrop: (node: CanvasNodeData) => void;
     onSplit: (node: CanvasNodeData) => void;
     onExplode: (node: CanvasNodeData) => void;
@@ -70,6 +71,7 @@ export function CanvasNodeHoverToolbar({
     onUploadMediaToCloud,
     onUploadImageToCloud,
     onMaskEdit,
+    onRectEdit,
     onCrop,
     onSplit,
     onExplode,
@@ -145,7 +147,7 @@ export function CanvasNodeHoverToolbar({
         }
         copyText(prompt, "提示词已复制");
     };
-    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onCrop, onSplit, onExplode, onUpscale, onSuperResolve, onAngle, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt }).filter(
+    const imageTools = buildImageToolbarTools(node, { onUpload, onToggleFreeResize, onMaskEdit, onRectEdit, onCrop, onSplit, onExplode, onUpscale, onSuperResolve, onAngle, onViewImage, onCopyPrompt: copyImagePrompt, onReversePrompt }).filter(
         (tool) => !isPanorama || tool.id !== "replace",
     );
 
