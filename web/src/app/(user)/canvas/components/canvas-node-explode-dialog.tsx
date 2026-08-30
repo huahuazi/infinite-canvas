@@ -9,7 +9,7 @@ import { downloadRemoteMedia } from "@/services/file-storage";
 import type { AiConfig } from "@/stores/use-config-store";
 import type { MattingRect } from "@/lib/explode/segment-matting";
 import { detectElements } from "@/lib/explode/element-detector";
-import type { ExplodeElementOption } from "@/app/(user)/canvas/utils/canvas-explode";
+import type { ExplodeElementOption } from "@/app/(user)/canvas/utils/canvas-explode-ai";
 
 export type CanvasImageExplodePayload = {
     elements: ExplodeElementOption[];

@@ -118,29 +118,36 @@ function drawRegionNumber(ctx: CanvasRenderingContext2D, color: string, label: s
     ctx.restore();
 }
 
-// 组装多区域修改 prompt
+// 组装多区域修改 prompt —— 措辞对齐「局部编辑」验证可行的直白风格
+// 不用"数字 N 对区域 N"的抽象映射，直接用「颜色名 + 编号」双锚定：
+// 每个区域是什么颜色我明确告诉模型（颜色视觉识别比读数字可靠得多），
+// 编号仅作为辅助区分。
 export function buildRectEditPrompt(items: RectEditItem[]): string {
     const regionLines = items
         .slice()
         .sort((a, b) => orderIndex(a.id, items) - orderIndex(b.id, items))
         .map((item, index) => {
-            const label = index + 1;
+            const colorName = regionColorName(index % REGION_COLOR_NAMES.length);
             const prompt = item.prompt.trim();
-            return `标记区域 ${label}：${prompt}`;
+            return `${colorName}区域（编号${index + 1}标记处）：${prompt}`;
         });
 
     const lines = [
-        "这是一张带有多个标记区域的图片，每个区域用不同颜色的半透明笔迹覆盖，并带白色数字编号。",
-        "参考图上写着数字 N 的位置，就是「标记区域 N」，请严格按编号逐一修改对应区域：",
+        "参考图中被彩色高亮覆盖的区域是需要修改的位置，不同区域用不同颜色区分，颜色只是编辑标记。",
+        "修改要求（按你看到的各颜色区域对应）：",
         ...regionLines,
         "要求：",
-        "- **只有被半透明彩色笔迹覆盖的像素区域才是修改目标**，笔迹之外（包括同编号的其它空白处）保持原样",
-        "- 笔迹形状即修改范围：沿笔迹形状边缘结束，不要扩散到整个矩形",
-        "- 不要修改任何未标记区域，保持整体构图、人物、光影和风格不变",
-        "- 编号数字和彩色笔迹只是编辑标记，不要保留在最终图像中",
-        "- 修改内容要与被标记物体本身一致（材质、结构、颜色、风格），而不是凭空重画整个区域",
+        "- 只修改被彩色高亮覆盖的区域，且严格按上面各颜色区域的要求分别修改",
+        "- 彩色高亮只是编辑标记，不要保留在最终图像中",
+        "- 未标记区域的构图、人物、文字、光影和风格保持不变",
     ];
     return lines.join("\n");
+}
+
+// 区域颜色 → 中文颜色名（与标记图渲染色一致，辅助模型锚定）
+const REGION_COLOR_NAMES = ["橙色", "蓝色", "红色", "绿色", "棕色", "紫红色", "深蓝色", "紫色"];
+function regionColorName(index: number): string {
+    return REGION_COLOR_NAMES[index % REGION_COLOR_NAMES.length];
 }
 
 function orderIndex(id: string, items: RectEditItem[]): number {

@@ -78,7 +78,7 @@ import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "../co
 import { CanvasNodeSplitDialog, type CanvasImageSplitParams } from "../components/canvas-node-split-dialog";
 import { CanvasNodeExplodeDialog, type CanvasImageExplodePayload } from "../components/canvas-node-explode-dialog";
 import { CanvasNodeRectEditDialog, type CanvasRectEditPayload } from "../components/canvas-node-rect-edit-dialog";
-import { explodeImageNode as executeExplodeImageNode } from "../utils/canvas-explode";
+import { explodeImageNode as executeExplodeImageNode, type ExplodeResult } from "../utils/canvas-explode-ai";
 import { buildMarkedReference, buildRectEditPrompt } from "../utils/canvas-rect-edit";
 import { CanvasNodeUpscaleDialog, type CanvasImageUpscaleParams } from "../components/canvas-node-upscale-dialog";
 import { buildNodeChatMessages, buildNodeGenerationContext, buildNodeGenerationInputs, hydrateNodeGenerationContext, type NodeGenerationContext, type NodeGenerationInput } from "../components/canvas-node-generation";
@@ -2527,7 +2527,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             if (!node.metadata?.content) return;
             setExplodeNodeId(null);
             const hideExplodeLoading = message.loading("正在爆炸元素...", 0);
-            let uploadedImages: UploadedImage[] = [];
 
             try {
                 const naturalWidth = node.metadata.naturalWidth || node.width;
@@ -2545,24 +2544,16 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onProgress: (msg) => hideExplodeLoading(),
                 });
 
-                uploadedImages = [];
-                setNodes((prev) => [...prev, ...result.childNodes]);
-                setConnections((prev) => [...prev, ...result.childNodes.map((child) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: child.id }))]);
-                setSelectedNodeIds(new Set(result.childNodes.map((child) => child.id)));
+                const allNodes = result.backgroundNode ? [...result.childNodes, result.backgroundNode] : result.childNodes;
+                setNodes((prev) => [...prev, ...allNodes]);
+                setConnections((prev) => [...prev, ...allNodes.map((child) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: child.id }))]);
+                setSelectedNodeIds(new Set(allNodes.map((child) => child.id)));
                 setSelectedConnectionId(null);
                 setDialogNodeId(null);
-                message.success(`已炸出 ${result.childNodes.length} 个元素 PNG${result.usedInpaint ? `，其中 ${result.occludedCount} 个已 AI 补缺口` : ""}`);
+                message.success(`已炸出 ${result.childNodes.length} 个元素 PNG${result.backgroundNode ? ` + 1 张背景补全图` : ""}`);
             } catch (error) {
-                let cleanupFailed = false;
-                if (uploadedImages.length) {
-                    try {
-                        await deleteStoredImages(uploadedImages.map((image) => image.storageKey));
-                    } catch {
-                        cleanupFailed = true;
-                    }
-                }
                 const errorMessage = error instanceof Error ? error.message : "元素爆炸失败";
-                message.error(cleanupFailed ? `${errorMessage}；部分临时图片清理失败` : errorMessage);
+                message.error(errorMessage);
             } finally {
                 hideExplodeLoading();
             }
