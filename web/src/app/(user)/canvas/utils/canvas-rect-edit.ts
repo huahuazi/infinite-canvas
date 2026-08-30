@@ -1,8 +1,10 @@
 "use client";
 
 // 框选修改 —— 主流程编排（画笔版）
-// 用户用画笔涂抹多个区域，每个区域配文字描述，合成为一张「标记图」
-// （每块涂抹选区按颜色高亮显示 + 编号角标），交给 image-2 编辑链路一次性修改全部区域。
+// 用户用画笔涂抹多个区域，每块配文字描述，合成为一张「标记图」发给 image-2 编辑。
+// 标记图合成逻辑与「局部编辑」一致（验证可行）：
+//   原图铺底 → 半透明色 → destination-in 用 mask 裁剪 → destination-over 补回原图
+// 每个区域独立显色 + 大号数字编号（AI 依据数字编号对应 prompt 中的"标记区域 N"）。
 
 import type { MattingRect } from "@/lib/explode/segment-matting";
 
@@ -19,9 +21,9 @@ export type RectEditMarkerOptions = {
     regionColors?: string[];
 };
 
-const DEFAULT_REGION_COLORS = ["#2f80ff", "#f58220", "#e24b4a", "#1d9e75", "#854f0b", "#993556", "#185fa5"];
+const DEFAULT_REGION_COLORS = ["#f58220", "#2f80ff", "#e24b4a", "#1d9e75", "#854f0b", "#993556", "#185fa5", "#534ab7"];
 
-// 合成标记图：原图打底 + 每个区域半透明高亮 + 编号 + 虚线描边
+// 合成标记图：原图打底 + 每个区域按 mask 形状半透明高亮 + 大号数字编号
 export function buildMarkedReference(source: string, items: RectEditItem[], options: RectEditMarkerOptions): Promise<string> {
     return new Promise((resolve, reject) => {
         const image = new Image();
@@ -36,54 +38,50 @@ export function buildMarkedReference(source: string, items: RectEditItem[], opti
 
             items.forEach((item, index) => {
                 const color = (options.regionColors || DEFAULT_REGION_COLORS)[index % (options.regionColors || DEFAULT_REGION_COLORS).length];
-                const hasMask = Boolean(item.maskCanvas && item.maskCanvas.width > 0);
+                const hasMask = Boolean(item.maskCanvas && item.maskCanvas.width > 0 && item.maskCanvas.height > 0);
 
-                // 区域高亮：优先涂抹 mask 形状（半透明色，只覆盖涂抹像素），否则矩形
                 if (hasMask) {
+                    // 与局部编辑一致的合成：先铺半透明色，再用 mask 裁剪，最后补回原图底
                     const maskCanvas = item.maskCanvas!;
-                    // mask 已与原图同尺寸；绘制半透明 tint，仅涂抹像素可见
-                    const tint = document.createElement("canvas");
-                    tint.width = options.width;
-                    tint.height = options.height;
-                    const tintCtx = tint.getContext("2d");
-                    if (tintCtx) {
-                        tintCtx.clearRect(0, 0, tint.width, tint.height);
-                        // 先用 mask 作为 alpha
-                        tintCtx.drawImage(maskCanvas, 0, 0, options.width, options.height);
-                        tintCtx.globalCompositeOperation = "source-in";
-                        // 半透明填充（~40% 可见，让模型看到涂抹形状内部细节）
-                        tintCtx.fillStyle = hexWithAlpha(color, 0.42);
-                        tintCtx.fillRect(0, 0, tint.width, tint.height);
-                        ctx.drawImage(tint, 0, 0);
-                        // 沿涂抹形状边缘画细实线轮廓（替代包围盒虚线，避免模型改整个矩形）
-                        drawMaskOutline(ctx, maskCanvas, options.width, options.height, color);
+                    // 把用户尺寸的 mask 精确缩放到标记图尺寸（避免坐标错位）
+                    const scaledMask = document.createElement("canvas");
+                    scaledMask.width = options.width;
+                    scaledMask.height = options.height;
+                    const smCtx = scaledMask.getContext("2d");
+                    if (smCtx) {
+                        smCtx.imageSmoothingEnabled = true;
+                        smCtx.drawImage(maskCanvas, 0, 0, options.width, options.height);
                     }
+                    ctx.save();
+                    ctx.globalCompositeOperation = "source-over";
+                    ctx.fillStyle = hexWithAlpha(color, 0.45);
+                    ctx.fillRect(0, 0, options.width, options.height);
+                    ctx.globalCompositeOperation = "destination-in";
+                    ctx.drawImage(scaledMask, 0, 0);
+                    ctx.globalCompositeOperation = "destination-over";
+                    ctx.drawImage(image, 0, 0, options.width, options.height);
+                    ctx.globalCompositeOperation = "source-over";
+                    // 沿涂抹形状画实线轮廓，标出精确修改边界
+                    drawMaskOutline(ctx, scaledMask, options.width, options.height, color);
+                    ctx.restore();
                 } else {
                     const rect = normalizeRect(item.bbox!, options.width, options.height);
-                    ctx.fillStyle = color + "33";
+                    ctx.save();
+                    ctx.fillStyle = hexWithAlpha(color, 0.45);
                     ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
                     ctx.strokeStyle = color;
                     ctx.lineWidth = Math.max(2, Math.round(Math.min(options.width, options.height) / 300));
                     ctx.setLineDash([6, 5]);
                     ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+                    ctx.restore();
                 }
+            });
 
-                // 编号角标（用包围盒位置，方便看清编号）
-                const rect = hasMask ? maskBoundsRect(item.maskCanvas!) : normalizeRect(item.bbox!, options.width, options.height);
-                const label = String(index + 1);
-                ctx.save();
-                ctx.font = `bold ${Math.max(22, Math.round(Math.min(options.width, options.height) / 22))}px sans-serif`;
-                const metrics = ctx.measureText(label);
-                const pad = 8;
-                const bx = rect.x;
-                const by = rect.y;
-                ctx.fillStyle = color;
-                ctx.fillRect(bx, by, metrics.width + pad * 2, Math.round(metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) + pad * 2);
-                ctx.fillStyle = "#fff";
-                ctx.textBaseline = "top";
-                ctx.textAlign = "left";
-                ctx.fillText(label, bx + pad, by + pad);
-                ctx.restore();
+            // 统一画大号数字编号（画在所有色块之上，保证可见）
+            items.forEach((item, index) => {
+                const color = (options.regionColors || DEFAULT_REGION_COLORS)[index % (options.regionColors || DEFAULT_REGION_COLORS).length];
+                const rect = item.maskCanvas && item.maskCanvas.width > 0 ? maskBoundsRectScaled(item.maskCanvas, options.width / item.maskCanvas.width, options.height / item.maskCanvas.height) : normalizeRect(item.bbox!, options.width, options.height);
+                drawRegionNumber(ctx, color, String(index + 1), rect, options.width, options.height);
             });
 
             resolve(canvas.toDataURL("image/png"));
@@ -92,6 +90,32 @@ export function buildMarkedReference(source: string, items: RectEditItem[], opti
         const src = source.startsWith("data:") || source.startsWith("blob:") ? source : source;
         image.src = src;
     });
+}
+
+// 在区域左上角画大号编号（彩色底 + 白字 + 白描边，确保 AI 可见可读）
+function drawRegionNumber(ctx: CanvasRenderingContext2D, color: string, label: string, rect: MattingRect, canvasWidth: number, canvasHeight: number) {
+    ctx.save();
+    const fontSize = Math.max(30, Math.round(Math.min(canvasWidth, canvasHeight) / 26));
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    const metrics = ctx.measureText(label);
+    const pad = Math.round(fontSize * 0.4);
+    const bw = metrics.width + pad * 2;
+    const bh = fontSize + pad * 1.6;
+    const bx = clamp(rect.x, 4, Math.max(4, canvasWidth - bw - 4));
+    const by = clamp(rect.y, 4, Math.max(4, canvasHeight - bh - 4));
+    // 白描边让编号在任意背景下可见
+    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(5, Math.round(fontSize / 5));
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.textBaseline = "middle";
+    ctx.strokeText(label, bx + pad, by + bh / 2 + 2);
+    // 彩色底
+    ctx.fillStyle = color;
+    ctx.fillRect(bx - 3, by - 3, bw + 6, bh + 6);
+    // 白字
+    ctx.fillStyle = "#fff";
+    ctx.fillText(label, bx + pad, by + bh / 2 + 2);
+    ctx.restore();
 }
 
 // 组装多区域修改 prompt
@@ -106,14 +130,14 @@ export function buildRectEditPrompt(items: RectEditItem[]): string {
         });
 
     const lines = [
-        "这是一张带有多个标记区域的图片，每个区域用不同颜色的半透明笔迹覆盖，并带编号。",
-        "请严格按编号逐一修改对应标记区域的内容：",
+        "这是一张带有多个标记区域的图片，每个区域用不同颜色的半透明笔迹覆盖，并带白色数字编号。",
+        "参考图上写着数字 N 的位置，就是「标记区域 N」，请严格按编号逐一修改对应区域：",
         ...regionLines,
         "要求：",
-        "- **只有被半透明彩色笔迹覆盖的像素区域才是修改目标**，笔迹之外（包括同一编号的虚线框内空白处）保持原样",
-        "- 笔迹形状即修改范围：沿笔迹形状边缘结束，不要扩散到整个矩形框",
+        "- **只有被半透明彩色笔迹覆盖的像素区域才是修改目标**，笔迹之外（包括同编号的其它空白处）保持原样",
+        "- 笔迹形状即修改范围：沿笔迹形状边缘结束，不要扩散到整个矩形",
         "- 不要修改任何未标记区域，保持整体构图、人物、光影和风格不变",
-        "- 编号文字和彩色笔迹只是编辑标记，不要保留在最终图像中",
+        "- 编号数字和彩色笔迹只是编辑标记，不要保留在最终图像中",
         "- 修改内容要与被标记物体本身一致（材质、结构、颜色、风格），而不是凭空重画整个区域",
     ];
     return lines.join("\n");
@@ -132,11 +156,16 @@ function normalizeRect(bbox: MattingRect, width: number, height: number): Mattin
     return { x, y, width: Math.min(w, width - x), height: Math.min(h, height - y) };
 }
 
-// 从涂抹 mask（原图尺寸像素）计算非空像素包围盒
+// 从涂抹 mask（原图尺寸像素）计算非空像素包围盒（像素坐标）
 function maskBoundsRect(maskCanvas: HTMLCanvasElement): MattingRect {
+    return maskBoundsRectScaled(maskCanvas, 1, 1);
+}
+
+// 从涂抹 mask 计算包围盒，并按缩放因子映射到标记图坐标
+function maskBoundsRectScaled(maskCanvas: HTMLCanvasElement, scaleX: number, scaleY: number): MattingRect {
     const ctx = maskCanvas.getContext("2d");
     const { width, height } = maskCanvas;
-    if (!ctx || !width || !height) return { x: 0, y: 0, width, height };
+    if (!ctx || !width || !height) return { x: 0, y: 0, width: 0, height: 0 };
     const data = ctx.getImageData(0, 0, width, height).data;
     let minX = width;
     let minY = height;
@@ -153,8 +182,13 @@ function maskBoundsRect(maskCanvas: HTMLCanvasElement): MattingRect {
             }
         }
     }
-    if (maxX < minX || maxY < minY) return { x: 0, y: 0, width, height };
-    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    if (maxX < minX || maxY < minY) return { x: 0, y: 0, width: 0, height: 0 };
+    return {
+        x: minX * scaleX,
+        y: minY * scaleY,
+        width: (maxX - minX) * scaleX,
+        height: (maxY - minY) * scaleY,
+    };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -170,7 +204,7 @@ function hexWithAlpha(hex: string, alpha: number): string {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// 沿涂抹 mask 边缘画细实线轮廓（替代包围盒虚线，让模型知道修改范围是笔迹形状本身）
+// 沿涂抹 mask 边缘画细实线轮廓（让模型知道修改范围是笔迹形状本身）
 function drawMaskOutline(ctx: CanvasRenderingContext2D, maskCanvas: HTMLCanvasElement, targetWidth: number, targetHeight: number, color: string) {
     const src = document.createElement("canvas");
     src.width = maskCanvas.width;
@@ -179,7 +213,6 @@ function drawMaskOutline(ctx: CanvasRenderingContext2D, maskCanvas: HTMLCanvasEl
     if (!srcCtx) return;
     srcCtx.drawImage(maskCanvas, 0, 0);
 
-    // 缩放 mask 到目标尺寸后检测边缘
     const scaled = document.createElement("canvas");
     scaled.width = targetWidth;
     scaled.height = targetHeight;
