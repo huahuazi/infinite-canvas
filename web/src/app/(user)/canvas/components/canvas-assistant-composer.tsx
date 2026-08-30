@@ -10,6 +10,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasAgentConfig, type CanvasAssistantReference } from "../types";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
+import { CanvasAgentModelSelector, type AgentModelSelection } from "./canvas-agent-model-selector";
 import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 import { CanvasVideoSettingsPopover } from "./canvas-video-settings-popover";
 
@@ -50,6 +51,19 @@ export function CanvasAssistantComposer({
     const effectiveConfig = useEffectiveConfig();
     const imageConfig = useMemo(() => ({ ...effectiveConfig, quality: agentConfig.imageQuality, size: agentConfig.imageSize }), [agentConfig.imageQuality, agentConfig.imageSize, effectiveConfig]);
     const videoConfig = useMemo(() => ({ ...effectiveConfig, vquality: agentConfig.videoQuality, size: agentConfig.videoSize }), [agentConfig.videoQuality, agentConfig.videoSize, effectiveConfig]);
+    const agentModelSelection: AgentModelSelection = useMemo(
+        () => ({
+            textModel: agentConfig.textModel || effectiveConfig.textModel || effectiveConfig.model,
+            textChannelId: agentConfig.textChannelId || effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
+            imageModel: agentConfig.imageModel || effectiveConfig.imageModel || effectiveConfig.model,
+            imageChannelId: agentConfig.imageChannelId || effectiveConfig.imageChannelId || effectiveConfig.activeChannelId,
+            videoModel: agentConfig.videoModel || effectiveConfig.videoModel || effectiveConfig.model,
+            videoChannelId: agentConfig.videoChannelId || effectiveConfig.videoChannelId || effectiveConfig.activeChannelId,
+            audioModel: agentConfig.audioModel || effectiveConfig.audioModel,
+            audioChannelId: agentConfig.audioChannelId || effectiveConfig.audioChannelId || effectiveConfig.activeChannelId,
+        }),
+        [agentConfig, effectiveConfig],
+    );
     const promptReferences = useMemo(() => {
         const seen = new Set<string>();
         return [...(availableReferences || []), ...references.map(assistantToPromptReference)].filter((reference) => {
@@ -90,6 +104,11 @@ export function CanvasAssistantComposer({
                         >
                             <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={{ color: theme.node.text }} icon={<Menu className="size-4" />} aria-label="添加素材" />
                         </Dropdown>
+                        <CanvasAgentModelSelector
+                            config={effectiveConfig}
+                            value={agentModelSelection}
+                            onChange={(patch) => onAgentConfigChange(patch)}
+                        />
                         <CanvasImageSettingsPopover
                             config={imageConfig}
                             placement="topLeft"

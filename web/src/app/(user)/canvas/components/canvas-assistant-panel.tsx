@@ -247,11 +247,13 @@ export function CanvasAssistantPanel({
         setComposerReferenceIds([]);
         setRemovedReferenceIds(new Set(selectedNodeIds));
 
+        const agentTextModel = agentConfig.textModel || effectiveConfig.textModel || effectiveConfig.model;
         const requestConfig = {
             ...effectiveConfig,
-            model: effectiveConfig.textModel || effectiveConfig.model,
-            activeChannelId: effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
-            textChannelId: effectiveConfig.textChannelId,
+            model: agentTextModel,
+            textModel: agentTextModel,
+            activeChannelId: agentConfig.textChannelId || effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
+            textChannelId: agentConfig.textChannelId || effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
         };
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
             updateMessage(session.id, assistantId, {

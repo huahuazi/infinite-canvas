@@ -64,6 +64,14 @@ export default function IndexPage() {
         imageSize: effectiveConfig.size,
         videoQuality: effectiveConfig.vquality,
         videoSize: effectiveConfig.videoSize,
+        textModel: effectiveConfig.textModel || effectiveConfig.model,
+        textChannelId: effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
+        imageModel: effectiveConfig.imageModel || effectiveConfig.model,
+        imageChannelId: effectiveConfig.imageChannelId || effectiveConfig.activeChannelId,
+        videoModel: effectiveConfig.videoModel || effectiveConfig.model,
+        videoChannelId: effectiveConfig.videoChannelId || effectiveConfig.activeChannelId,
+        audioModel: effectiveConfig.audioModel,
+        audioChannelId: effectiveConfig.audioChannelId || effectiveConfig.activeChannelId,
     }));
     const uploadInputRef = useRef<HTMLInputElement>(null);
     const pendingAssetCountsRef = useRef<Record<InsertAssetPayload["kind"], number>>({ text: 0, image: 0, video: 0, audio: 0 });
