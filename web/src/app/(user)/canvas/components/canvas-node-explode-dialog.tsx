@@ -65,6 +65,11 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
                 setActiveBox(null);
                 setMode("draw");
             }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "读取图片失败";
+            message.error(errorMessage);
+            setActiveBox(null);
+            setMode("draw");
         } finally {
             setDetecting(false);
         }

@@ -7,7 +7,6 @@
 // 注意：bbox 为原图归一化坐标（0~1），定位不重画，只做识别。
 
 import { requestCanvasAgentTurn } from "@/services/api/canvas-agent";
-import { imageToDataUrl } from "@/services/image-storage";
 import type { AiConfig } from "@/stores/use-config-store";
 import type { MattingRect } from "./segment-matting";
 
@@ -41,7 +40,7 @@ export type DetectResult = {
 
 export async function detectElements(source: string | Blob, options: DetectOptions): Promise<DetectResult> {
     try {
-        const dataUrl = await imageToDataUrl({ dataUrl: toSourceUrl(source), url: typeof source === "string" ? toSourceUrl(source) : undefined });
+        const dataUrl = await sourceToDataUrl(source);
         if (!dataUrl) return { elements: [], error: "未能读取图片内容" };
         const config: AiConfig = { ...options.config, model: options.config.textModel || options.config.model };
         const turn = await requestCanvasAgentTurn({
@@ -113,9 +112,39 @@ function extractJson(content: string): string | null {
     return null;
 }
 
-function toSourceUrl(source: string | Blob): string {
-    if (typeof source === "string") return source;
-    return URL.createObjectURL(source);
+// 把任意来源（data:/blob:/http/相对URL/file）统一转成 data: 前缀的 dataURL
+// 关键：用 canvas 读图，绕开 imageToDataUrl 对 blob: 的过滤限制
+async function sourceToDataUrl(source: string | Blob): Promise<string> {
+    if (typeof source === "string" && source.startsWith("data:")) return source;
+    // 解析成可加载的 url source（http/相对路径原样，blob 用 createObjectURL，file 也走 blob）
+    let url: string;
+    if (typeof source === "string") {
+        url = source;
+    } else {
+        url = URL.createObjectURL(source);
+    }
+    try {
+        const image = await loadImageElement(url);
+        const canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth || image.width;
+        canvas.height = image.naturalHeight || image.height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx || !canvas.width || !canvas.height) return "";
+        ctx.drawImage(image, 0, 0);
+        return canvas.toDataURL("image/png");
+    } finally {
+        if (typeof source !== "string") URL.revokeObjectURL(url);
+    }
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("图片加载失败"));
+        image.src = src;
+    });
 }
 
 function clamp01(value: number) {
