@@ -2,29 +2,89 @@ package repository
 
 import (
 	"errors"
+	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
 )
 
-// PromptCategories 返回内置提示词分类的副本。
-func PromptCategories() []model.PromptCategory {
+// BuiltinPromptCategories 返回内置提示词分类的副本（内存常量）。
+func BuiltinPromptCategories() []model.PromptCategory {
 	result := make([]model.PromptCategory, len(promptCategories))
 	copy(result, promptCategories)
 	return result
 }
 
-// PromptCategoryByCode 根据分类编码查找内置提示词分类。
+// PromptCategories 返回内置 + 管理员自定义提示词分类的合并副本。
+func PromptCategories() []model.PromptCategory {
+	result := BuiltinPromptCategories()
+	custom, _ := ListCustomPromptCategories()
+	result = append(result, custom...)
+	return result
+}
+
+// ListCustomPromptCategories 从数据库读取管理员自定义分类。
+func ListCustomPromptCategories() ([]model.PromptCategory, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, err
+	}
+	var items []model.PromptCategory
+	if err := db.Where("custom = ?", true).Order("updated_at desc").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// SaveCustomPromptCategory 保存或更新管理员自定义分类（去重同 category）。
+func SaveCustomPromptCategory(item model.PromptCategory) (model.PromptCategory, error) {
+	db, err := DB()
+	if err != nil {
+		return item, err
+	}
+	item.Custom = true
+	if item.UpdatedAt == "" {
+		item.UpdatedAt = time.Now().Format(time.RFC3339)
+	}
+	if err := db.Save(&item).Error; err != nil {
+		return item, err
+	}
+	return item, nil
+}
+
+// DeleteCustomPromptCategory 删除自定义分类及该分类下全部提示词。
+func DeleteCustomPromptCategory(category string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&model.Prompt{}, "category = ?", category).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&model.PromptCategory{}, "category = ?", category).Error
+	})
+}
+
+// PromptCategoryByCode 根据分类编码查找提示词分类（含自定义）。
 func PromptCategoryByCode(category string) (model.PromptCategory, bool) {
 	for _, item := range promptCategories {
 		if item.Category == category {
 			return item, true
 		}
 	}
+	custom, err := ListCustomPromptCategories()
+	if err == nil {
+		for _, item := range custom {
+			if item.Category == category {
+				return item, true
+			}
+		}
+	}
 	return model.PromptCategory{}, false
 }
 
-// ListPromptCategories 返回内置提示词分类。
+// ListPromptCategories 返回全部提示词分类（含自定义）。
 func ListPromptCategories() ([]model.PromptCategory, error) {
 	return PromptCategories(), nil
 }

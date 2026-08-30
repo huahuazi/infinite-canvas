@@ -147,6 +147,12 @@ func New() *gin.Engine {
 	admin.GET("/prompt-categories", gin.WrapF(handler.AdminPromptCategories))
 	admin.POST("/prompt-categories/sync", gin.WrapF(handler.AdminSyncPromptCategories))
 	admin.POST("/prompt-categories/sync-all", gin.WrapF(handler.AdminSyncAllPromptCategories))
+	admin.GET("/prompt-categories/custom", gin.WrapF(handler.AdminCustomPromptCategories))
+	admin.POST("/prompt-categories/custom", gin.WrapF(handler.AdminSaveCustomPromptCategory))
+	admin.POST("/prompt-categories/custom/sync", gin.WrapF(handler.AdminSyncCustomPromptCategory))
+	admin.DELETE("/prompt-categories/custom/:category", func(c *gin.Context) {
+		handler.AdminDeleteCustomPromptCategory(c.Writer, c.Request, c.Param("category"))
+	})
 	admin.GET("/prompts", gin.WrapF(handler.AdminPrompts))
 	admin.POST("/prompts", gin.WrapF(handler.AdminSavePrompt))
 	admin.POST("/prompts/batch-delete", gin.WrapF(handler.AdminDeletePrompts))

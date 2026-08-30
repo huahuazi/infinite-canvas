@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { App } from "antd";
 
-import { deleteAdminPrompt, deleteAdminPrompts, fetchAdminPrompts, fetchAdminPromptCategories, saveAdminPrompt, syncAdminPromptCategoriesAll, syncAdminPromptCategory, type AdminPromptCategory } from "@/services/api/admin";
+import { deleteAdminPrompt, deleteAdminPrompts, fetchAdminPrompts, fetchAdminPromptCategories, fetchAdminCustomPromptCategories, saveAdminPrompt, saveAdminCustomPromptCategory, deleteAdminCustomPromptCategory, syncAdminCustomPromptCategory, syncAdminPromptCategoriesAll, syncAdminPromptCategory, type AdminPromptCategory } from "@/services/api/admin";
 import type { Prompt } from "@/services/api/prompts";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -24,6 +24,13 @@ export function useAdminPrompts() {
     const categoriesQuery = useQuery({
         queryKey: ["admin", "prompt-categories", token],
         queryFn: () => fetchAdminPromptCategories(token),
+        enabled: Boolean(token),
+        retry: false,
+    });
+
+    const customCategoriesQuery = useQuery({
+        queryKey: ["admin", "custom-prompt-categories", token],
+        queryFn: () => fetchAdminCustomPromptCategories(token),
         enabled: Boolean(token),
         retry: false,
     });
@@ -53,6 +60,44 @@ export function useAdminPrompts() {
             queryClient.setQueryData<AdminPromptCategory[]>(["admin", "prompt-categories", token], categories);
             await queryClient.invalidateQueries({ queryKey: ["admin", "prompts"] });
             message.success("全部远程提示词源已同步");
+        },
+        onError: (error) => {
+            message.error(error instanceof Error ? error.message : "同步失败");
+        },
+    });
+
+    const saveCustomCategoryMutation = useMutation({
+        mutationFn: (category: AdminPromptCategory) => saveAdminCustomPromptCategory(token, category),
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ["admin", "custom-prompt-categories", token] });
+            await queryClient.invalidateQueries({ queryKey: ["admin", "prompt-categories", token] });
+            message.success("自定义提示词库已保存");
+        },
+        onError: (error) => {
+            message.error(error instanceof Error ? error.message : "保存失败");
+        },
+    });
+
+    const deleteCustomCategoryMutation = useMutation({
+        mutationFn: (category: string) => deleteAdminCustomPromptCategory(token, category),
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ["admin", "custom-prompt-categories", token] });
+            await queryClient.invalidateQueries({ queryKey: ["admin", "prompt-categories", token] });
+            await queryClient.invalidateQueries({ queryKey: ["admin", "prompts"] });
+            message.success("自定义提示词库已删除");
+        },
+        onError: (error) => {
+            message.error(error instanceof Error ? error.message : "删除失败");
+        },
+    });
+
+    const syncCustomCategoryMutation = useMutation({
+        mutationFn: (category: string) => syncAdminCustomPromptCategory(token, category),
+        onSuccess: async (categories) => {
+            queryClient.setQueryData<AdminPromptCategory[]>(["admin", "prompt-categories", token], categories);
+            await queryClient.invalidateQueries({ queryKey: ["admin", "custom-prompt-categories", token] });
+            await queryClient.invalidateQueries({ queryKey: ["admin", "prompts"] });
+            message.success("自定义提示词库已同步");
         },
         onError: (error) => {
             message.error(error instanceof Error ? error.message : "同步失败");
@@ -117,6 +162,7 @@ export function useAdminPrompts() {
 
     return {
         categories: categoriesQuery.data || [],
+        customCategories: customCategoriesQuery.data || [],
         prompts: data?.items || [],
         tags: data?.tags || [],
         keyword,
@@ -142,5 +188,8 @@ export function useAdminPrompts() {
         savePrompt: (prompt: Partial<Prompt>) => saveMutation.mutateAsync(prompt),
         deletePrompt: (id: string) => deleteMutation.mutateAsync(id),
         deletePrompts: (ids: string[]) => batchDeleteMutation.mutateAsync(ids),
+        saveCustomCategory: (category: AdminPromptCategory) => saveCustomCategoryMutation.mutateAsync(category),
+        deleteCustomCategory: (category: string) => deleteCustomCategoryMutation.mutateAsync(category),
+        syncCustomCategory: (category: string) => syncCustomCategoryMutation.mutateAsync(category),
     };
 }

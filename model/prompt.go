@@ -29,5 +29,6 @@ type PromptCategory struct {
 	Description string `json:"description"`
 	GithubURL   string `json:"githubUrl"`
 	Remote      bool   `json:"remote"`
+	Custom      bool   `json:"custom" gorm:"index"` // true 表示管理员自定义分类，入库存储；false 表示内置分类（仅常量）
 	UpdatedAt   string `json:"updatedAt"`
 }

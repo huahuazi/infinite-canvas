@@ -7,11 +7,13 @@ import { useEffect, useState } from "react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import type { Prompt } from "@/services/api/prompts";
+import { type AdminPromptCategory } from "@/services/api/admin";
 import { useAdminPrompts } from "./use-admin-prompts";
 
 export default function AdminPromptsPage() {
     const {
         categories,
+        customCategories,
         prompts,
         tags,
         keyword,
@@ -34,6 +36,9 @@ export default function AdminPromptsPage() {
         savePrompt: saveAdminPrompt,
         deletePrompt,
         deletePrompts,
+        saveCustomCategory,
+        deleteCustomCategory,
+        syncCustomCategory,
     } = useAdminPrompts();
     const copyText = useCopyText();
     const [form] = Form.useForm<Partial<Prompt> & { tagText?: string }>();
@@ -44,6 +49,9 @@ export default function AdminPromptsPage() {
     const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>([]);
     const [isBatchDeleteOpen, setIsBatchDeleteOpen] = useState(false);
     const [isSyncOpen, setIsSyncOpen] = useState(false);
+    const [editingCustomCategory, setEditingCustomCategory] = useState<AdminPromptCategory | null>(null);
+    const [deletingCustomCategory, setDeletingCustomCategory] = useState<AdminPromptCategory | null>(null);
+    const [customCategoryForm] = Form.useForm<AdminPromptCategory>();
     const defaultCategory = categories[0]?.category || "";
     const categoryName = (category: string) => categories.find((item) => item.category === category)?.name || category;
     const categoryOptions = [{ label: "全部分类", value: "" }, ...categories.map((item) => ({ label: item.name, value: item.category }))];
@@ -73,6 +81,18 @@ export default function AdminPromptsPage() {
         await deletePrompts(selectedPromptIds);
         setSelectedPromptIds([]);
         setIsBatchDeleteOpen(false);
+    };
+
+    const saveCustomCategoryPrompt = async () => {
+        const value = await customCategoryForm.validateFields();
+        await saveCustomCategory(value);
+        setEditingCustomCategory(null);
+    };
+
+    const deleteCustomCategoryPrompt = async () => {
+        if (!deletingCustomCategory) return;
+        await deleteCustomCategory(deletingCustomCategory.category);
+        setDeletingCustomCategory(null);
     };
 
     const columns: ProColumns<Prompt>[] = [
@@ -171,6 +191,63 @@ export default function AdminPromptsPage() {
                             </Col>
                         </Row>
                     </Form>
+                </Card>
+                <Card variant="borderless" title={
+                    <Space>
+                        <Typography.Text strong>自定义提示词库</Typography.Text>
+                        <Tag>{customCategories.length} 个</Tag>
+                    </Space>
+                } extra={
+                    <Button type="primary" icon={<PlusOutlined />} onClick={() => { customCategoryForm.resetFields(); setEditingCustomCategory({ category: "", name: "", description: "", file: "", githubUrl: "", remote: false, custom: true }); }}>
+                        新建库
+                    </Button>
+                }>
+                    <Table
+                        rowKey="category"
+                        dataSource={customCategories}
+                        pagination={false}
+                        columns={[
+                            {
+                                title: "分类编码",
+                                dataIndex: "category",
+                                width: 200,
+                            },
+                            {
+                                title: "名称",
+                                dataIndex: "name",
+                                render: (_, item) => <Typography.Text strong>{item.name}</Typography.Text>,
+                            },
+                            {
+                                title: "说明",
+                                dataIndex: "description",
+                                render: (_, item) => <Typography.Text type="secondary" ellipsis>{item.description || "-"}</Typography.Text>,
+                            },
+                            {
+                                title: "GitHub 源",
+                                dataIndex: "githubUrl",
+                                render: (_, item) => item.githubUrl ? <Typography.Link href={item.githubUrl} target="_blank"><Space><ExportOutlined />远程源</Space></Typography.Link> : <Typography.Text type="secondary">未配置</Typography.Text>,
+                            },
+                            {
+                                title: "操作",
+                                key: "actions",
+                                width: 180,
+                                align: "right",
+                                render: (_, item) => (
+                                    <Space size={4}>
+                                        <Tooltip title="同步">
+                                            <Button type="text" size="small" icon={<SyncOutlined />} onClick={async () => { try { await syncCustomCategory(item.category); } catch {} }} />
+                                        </Tooltip>
+                                        <Tooltip title="编辑">
+                                            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => { customCategoryForm.setFieldsValue(item); setEditingCustomCategory(item); }} />
+                                        </Tooltip>
+                                        <Tooltip title="删除">
+                                            <Button danger type="text" size="small" icon={<DeleteOutlined />} onClick={() => setDeletingCustomCategory(item)} />
+                                        </Tooltip>
+                                    </Space>
+                                ),
+                            },
+                        ]}
+                    />
                 </Card>
                 <ProTable<Prompt>
                     rowKey="id"
@@ -345,6 +422,28 @@ export default function AdminPromptsPage() {
 
             <Modal title="批量删除提示词" open={isBatchDeleteOpen} onCancel={() => setIsBatchDeleteOpen(false)} onOk={() => void batchDeletePrompts()} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
                 确定删除已选中的 {selectedPromptIds.length} 条提示词吗？删除后会从当前分类中删除。
+            </Modal>
+
+            <Modal title={editingCustomCategory?.category ? "编辑自定义提示词库" : "新建自定义提示词库"} open={Boolean(editingCustomCategory)} width={640} onCancel={() => setEditingCustomCategory(null)} onOk={() => void saveCustomCategoryPrompt()} okText="保存" cancelText="取消" destroyOnHidden>
+                <Form form={customCategoryForm} layout="vertical" requiredMark={false}>
+                    <Form.Item name="category" label="分类编码（唯一，英文/数字/中划线）" rules={[{ required: true, message: "请输入分类编码" }]}>
+                        <Input placeholder="如 video-prompts / ecommerce-prompts" disabled={Boolean(editingCustomCategory?.category)} />
+                    </Form.Item>
+                    <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入名称" }]}>
+                        <Input placeholder="如 视频提示词库 / 电商产品出图库" />
+                    </Form.Item>
+                    <Form.Item name="description" label="说明">
+                        <Input.TextArea rows={2} placeholder="这个库的用途简介" />
+                    </Form.Item>
+                    <Form.Item name="githubUrl" label="GitHub 仓库地址（配置后可一键同步）">
+                        <Input placeholder="如 https://github.com/owner/repo" />
+                    </Form.Item>
+                </Form>
+                <Typography.Text type="secondary">配置 GitHub 地址后点「同步」会按 Markdown 标题+代码块 / JSON / 纯文本自动解析出提示词；不填则仅作为空库手动添加。</Typography.Text>
+            </Modal>
+
+            <Modal title="删除自定义提示词库" open={Boolean(deletingCustomCategory)} onCancel={() => setDeletingCustomCategory(null)} onOk={async () => { await deleteCustomCategoryPrompt(); }} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
+                确定删除「{deletingCustomCategory?.name}」吗？该分类及其下全部提示词都会被删除，且不影响内置库。
             </Modal>
         </main>
     );
