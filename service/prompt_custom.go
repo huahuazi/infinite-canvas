@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -259,7 +260,17 @@ func parseCustomMarkdownPrompts(rawBase string, markdown string) []model.Prompt 
 		if len(images) > 0 {
 			cover = images[0]
 		}
-		items = append(items, model.Prompt{Title: title, CoverURL: cover, Prompt: prompt, Tags: tagsFromHeading(title), Preview: markdownPreview(images)})
+		tags := tagsFromHeading(title)
+		if tagText := firstMatch(block, `标签[:：]\s*\*{0,2}\s*([^\n]+)`); tagText != "" {
+			if split := splitCustomTags(tagText); len(split) > 0 {
+				tags = split
+			}
+		} else if tagText := firstMatch(block, `(?i)Tags[:：]\s*\*{0,2}\s*([^\n]+)`); tagText != "" {
+			if split := splitCustomTags(tagText); len(split) > 0 {
+				tags = split
+			}
+		}
+		items = append(items, model.Prompt{Title: title, CoverURL: cover, Prompt: prompt, Tags: tags, Preview: markdownPreview(images)})
 	}
 	return items
 }
@@ -366,4 +377,21 @@ func firstNonEmptyPrefix(value string, count int) string {
 		return value
 	}
 	return string(runes[:count]) + "…"
+}
+
+// splitCustomTags 拆分标签字串：只按英文逗号、中文逗号、顿号、斜杠拆分，
+// 保留 &（如 Products & E-commerce 整体）与原始大小写（UI / 3D 不改写）。
+func splitCustomTags(value string) []string {
+	parts := regexp.MustCompile(`\s*(,|，|、|/)\s*`).Split(value, -1)
+	tags := []string{}
+	seen := map[string]bool{}
+	for _, part := range parts {
+		tag := strings.TrimSpace(part)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		tags = append(tags, tag)
+	}
+	return tags
 }

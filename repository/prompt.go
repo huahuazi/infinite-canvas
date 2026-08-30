@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -224,16 +225,24 @@ func applyPromptTagsFilter(tx *gorm.DB, tags []string) *gorm.DB {
 }
 
 func promptTagsFromItems(items []model.Prompt) []string {
-	seen := map[string]bool{}
-	tags := []string{}
+	count := map[string]int{}
 	for _, item := range items {
 		for _, tag := range item.Tags {
-			if tag != "" && !seen[tag] {
-				seen[tag] = true
-				tags = append(tags, tag)
+			if tag != "" {
+				count[tag]++
 			}
 		}
 	}
+	tags := make([]string, 0, len(count))
+	for tag := range count {
+		tags = append(tags, tag)
+	}
+	sort.Slice(tags, func(i, j int) bool {
+		if count[tags[i]] != count[tags[j]] {
+			return count[tags[i]] > count[tags[j]]
+		}
+		return tags[i] < tags[j]
+	})
 	return tags
 }
 

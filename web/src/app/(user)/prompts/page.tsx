@@ -18,6 +18,7 @@ export default function PromptsPage() {
     const [titleKeyword, setTitleKeyword] = useState("");
     const [selectedTags, setSelectedTags] = useState<string[]>([]);
     const [selectedCategory, setSelectedCategory] = useState(ALL_PROMPTS_OPTION);
+    const [showAllTags, setShowAllTags] = useState(false);
     const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
     const addAsset = useAssetStore((state) => state.addAsset);
     const copyText = useCopyText();
@@ -85,7 +86,7 @@ export default function PromptsPage() {
                                 <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-start">
                                     <div className="pt-2 text-xs font-medium text-stone-500 dark:text-stone-400">标签</div>
                                     <div className="flex flex-wrap gap-2">
-                                        {promptTags.map((tag) => (
+                                        {promptTags.slice(0, showAllTags ? promptTags.length : 30).map((tag) => (
                                             <Tag.CheckableTag
                                                 key={tag}
                                                 checked={tag === ALL_PROMPTS_OPTION ? selectedTags.length === 0 : selectedTags.includes(tag)}
@@ -95,6 +96,16 @@ export default function PromptsPage() {
                                                 {tag}
                                             </Tag.CheckableTag>
                                         ))}
+                                        {!showAllTags && promptTags.length > 30 ? (
+                                            <Tag.CheckableTag className={cn("prompt-filter-tag", "is-more")} checked={false} onChange={() => setShowAllTags(true)}>
+                                                还有 {promptTags.length - 30} 个…
+                                            </Tag.CheckableTag>
+                                        ) : null}
+                                        {showAllTags && promptTags.length > 30 ? (
+                                            <Tag.CheckableTag className={cn("prompt-filter-tag", "is-more")} checked={false} onChange={() => setShowAllTags(false)}>
+                                                收起
+                                            </Tag.CheckableTag>
+                                        ) : null}
                                     </div>
                                 </div>
                             </div>
