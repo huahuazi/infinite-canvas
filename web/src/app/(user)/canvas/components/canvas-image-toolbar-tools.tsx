@@ -1,11 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Brush, Camera, Copy, FileText, Grid2x2, Lock, LockOpen, Maximize2, Scissors, Sparkles, Upload, ZoomIn } from "lucide-react";
+import { Bomb, Brush, Camera, Copy, FileText, Grid2x2, Lock, LockOpen, Maximize2, Scissors, Sparkles, Upload, ZoomIn } from "lucide-react";
 
 import type { CanvasNodeData } from "../types";
 
-export type ImageNodeActionToolId = "copyPrompt" | "reversePrompt" | "replace" | "resize" | "maskEdit" | "crop" | "split" | "upscale" | "superResolve" | "angle" | "view";
+export type ImageNodeActionToolId = "copyPrompt" | "reversePrompt" | "replace" | "resize" | "maskEdit" | "crop" | "split" | "explode" | "upscale" | "superResolve" | "angle" | "view";
 export type ImageQuickToolId = "info" | "delete" | "saveAsset" | "download" | "edit" | ImageNodeActionToolId;
 
 export type ImageToolHandlers = {
@@ -14,6 +14,7 @@ export type ImageToolHandlers = {
     onMaskEdit: (node: CanvasNodeData) => void;
     onCrop: (node: CanvasNodeData) => void;
     onSplit: (node: CanvasNodeData) => void;
+    onExplode: (node: CanvasNodeData) => void;
     onUpscale: (node: CanvasNodeData) => void;
     onSuperResolve: (node: CanvasNodeData) => void;
     onAngle: (node: CanvasNodeData) => void;
@@ -107,6 +108,15 @@ export const imageToolDefinitions: ImageToolDefinition[] = [
         title: "按行列切分图片",
         icon: () => <Grid2x2 className="size-4" />,
         run: (node, handlers) => handlers.onSplit(node),
+    },
+    {
+        id: "explode",
+        defaultVisible: true,
+        panelLabel: "元素爆炸",
+        label: "元素爆炸",
+        title: "把图片中的各个元素拆分成独立透明 PNG",
+        icon: () => <Bomb className="size-4" />,
+        run: (node, handlers) => handlers.onExplode(node),
     },
     {
         id: "upscale",

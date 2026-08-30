@@ -1,0 +1,304 @@
+"use client";
+
+// 元素爆炸 —— 本地像素级抠图引擎（方案 1：RMBG 保真抠图）
+// 用 <script> 运行时注入 @huggingface/transformers UMD 包（挂到 window.transformers），
+// 在浏览器 wasm 上跑 RMBG-1.4，对每个元素的 bbox 抠出透明底 PNG。
+// 关键：像素级 mask × ROI，不重画、不漂移，保真。原图不上传第三方。
+// 兼容 Next 16（Turbopack）：用 script 注入替代 ESM 动态 import，绕开构建解析。
+
+export type MattingRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
+
+export type MattingOptions = {
+    rect?: MattingRect; // 目标区域；不传则整图抠
+    feather?: number; // 边缘羽化半径（默认 2）
+    maxEdge?: number; // 处理长边上限（默认 2048），超限先缩放
+};
+
+const DEFAULT_FEATHER = 2;
+const DEFAULT_MAX_EDGE = 2048;
+const CDN_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.1/dist/transformers.min.js";
+const MODEL_ID = "briaai/RMBG-1.4";
+
+type TransformersModule = {
+    pipeline?: (task: string, model: string, options?: Record<string, unknown>) => Promise<(input: string | Blob) => Promise<{ output?: unknown }>>;
+    env?: {
+        allowLocalModels?: boolean;
+        allowRemoteModels?: boolean;
+        useBrowserCache?: boolean;
+        remoteHost?: string;
+        remotePathTemplate?: string;
+    };
+};
+
+let pipelinePromise: Promise<((input: string | Blob) => Promise<{ output?: unknown }>) | null> | null = null;
+
+function getWindow(): (Window & { transformers?: TransformersModule }) | null {
+    if (typeof window === "undefined") return null;
+    return window as Window & { transformers?: TransformersModule };
+}
+
+function loadScript(src: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
+        if (existing) {
+            existing.addEventListener("load", () => resolve(), { once: true });
+            existing.addEventListener("error", () => reject(new Error("模型脚本加载失败")), { once: true });
+            return;
+        }
+        const script = document.createElement("script");
+        script.src = src;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error("模型脚本加载失败"));
+        document.head.appendChild(script);
+    });
+}
+
+async function loadTransformers(): Promise<TransformersModule> {
+    const win = getWindow();
+    if (win?.transformers) return win.transformers;
+    await loadScript(CDN_URL);
+    const loaded = getWindow()?.transformers;
+    if (!loaded) throw new Error("transformers 未挂载到 window");
+    // 配置环境：走国内镜像 + 浏览器缓存
+    const env = loaded.env;
+    if (env) {
+        env.allowLocalModels = false;
+        env.allowRemoteModels = true;
+        env.useBrowserCache = true;
+        env.remoteHost = "https://hf-mirror.com";
+    }
+    return loaded;
+}
+
+async function loadMattingRunner(): Promise<((input: string | Blob) => Promise<{ output?: unknown }>) | null> {
+    if (pipelinePromise) return pipelinePromise;
+
+    pipelinePromise = (async () => {
+        try {
+            const mod = await loadTransformers();
+            if (!mod.pipeline) throw new Error("transformers 未提供 pipeline");
+            const runner = await mod.pipeline("background-removal", MODEL_ID, {
+                device: "wasm",
+                dtype: "fp32",
+            });
+            return runner;
+        } catch (error) {
+            console.warn("[segment-matting] RMBG 模型加载失败，将降级为原图", error);
+            return null;
+        }
+    })();
+
+    return pipelinePromise;
+}
+
+export function isMattingReady() {
+    return pipelinePromise !== null;
+}
+
+export async function warmUpMatting() {
+    await loadMattingRunner();
+}
+
+export async function mattingDataUrl(source: string | Blob, options: MattingOptions = {}): Promise<string> {
+    const runner = await loadMattingRunner();
+    if (!runner) {
+        return cropFallback(source, options.rect);
+    }
+
+    const roiUrl = await buildRoi(source, options);
+    try {
+        const result = await runner(roiUrl);
+        const output = result?.output;
+        if (!output) return cropFallback(source, options.rect);
+        return await compositeMatting(roiUrl, output as { data?: Uint8ClampedArray; width?: number; height?: number }, options);
+    } catch (error) {
+        console.warn("[segment-matting] 抠图失败，降级", error);
+        return cropFallback(source, options.rect);
+    }
+}
+
+async function buildRoi(source: string | Blob, options: MattingOptions): Promise<string> {
+    const image = await loadImageElement(source);
+    const rect = normalizeRect(options.rect, image.width, image.height);
+    const maxEdge = options.maxEdge ?? DEFAULT_MAX_EDGE;
+    const longEdge = Math.max(rect.width, rect.height);
+    const scale = longEdge > maxEdge ? maxEdge / longEdge : 1;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(rect.width * scale));
+    canvas.height = Math.max(1, Math.round(rect.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return cropFallback(source, options.rect);
+    context.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+}
+
+async function compositeMatting(roiUrl: string, output: { data?: Uint8ClampedArray; width?: number; height?: number }, options: MattingOptions): Promise<string> {
+    const roiImage = await loadImageElement(roiUrl);
+    const width = roiImage.width;
+    const height = roiImage.height;
+    const feather = options.feather ?? DEFAULT_FEATHER;
+
+    const maskCanvas = await toMaskCanvas(output, width, height);
+    if (!maskCanvas) return roiUrl;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return roiUrl;
+
+    context.drawImage(roiImage, 0, 0);
+    context.save();
+    context.globalCompositeOperation = "destination-in";
+    context.drawImage(maskCanvas, 0, 0, width, height);
+    context.restore();
+
+    if (feather > 0) {
+        featherAlpha(context, width, height, feather);
+    }
+
+    return canvas.toDataURL("image/png");
+}
+
+async function toMaskCanvas(output: { data?: Uint8ClampedArray; width?: number; height?: number }, targetWidth: number, targetHeight: number): Promise<HTMLCanvasElement | null> {
+    const srcCanvas = document.createElement("canvas");
+    const mh = output.height && output.height > 0 ? Math.floor(output.height) : targetHeight;
+    const mw = output.width && output.width > 0 ? Math.floor(output.width) : targetWidth;
+    srcCanvas.width = mw;
+    srcCanvas.height = mh;
+    const srcCtx = srcCanvas.getContext("2d");
+    if (!srcCtx) return null;
+
+    if (output.data) {
+        // RMBG 输出通常是单通道 mask，需转成 RGBA 灰度图
+        const rgba = normalizeMaskToRgba(output.data, mw, mh);
+        const imageData = new ImageData(rgba, mw, mh);
+        srcCtx.putImageData(imageData, 0, 0);
+    } else {
+        return null;
+    }
+
+    const dst = document.createElement("canvas");
+    dst.width = targetWidth;
+    dst.height = targetHeight;
+    const dstCtx = dst.getContext("2d");
+    if (!dstCtx) return null;
+    dstCtx.imageSmoothingEnabled = true;
+    dstCtx.imageSmoothingQuality = "high";
+    dstCtx.drawImage(srcCanvas, 0, 0, targetWidth, targetHeight);
+    return dst;
+}
+
+function normalizeMaskToRgba(data: Uint8ClampedArray, width: number, height: number): Uint8ClampedArray<ArrayBuffer> {
+    const rgba = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < width * height; i += 1) {
+        let v = 0;
+        const idx = i * 4;
+        if (idx + 2 < data.length) {
+            // 已有 RGBA：取亮度作为 mask
+            v = Math.max(data[idx], data[idx + 1], data[idx + 2]);
+            if (data[idx + 3] !== undefined && data[idx + 3] !== 255) {
+                v = Math.max(v, data[idx + 3]);
+            }
+        } else if (idx + 1 < data.length) {
+            v = data[idx];
+        } else if (i < data.length) {
+            v = data[i];
+        }
+        const out = i * 4;
+        rgba[out] = 255;
+        rgba[out + 1] = 255;
+        rgba[out + 2] = 255;
+        rgba[out + 3] = v;
+    }
+    return rgba;
+}
+
+function featherAlpha(context: CanvasRenderingContext2D, width: number, height: number, feather: number) {
+    const imageData = context.getImageData(0, 0, width, height);
+    const px = imageData.data;
+    const alpha = new Float32Array(width * height);
+    for (let i = 0; i < width * height; i += 1) alpha[i] = px[i * 4 + 3];
+    const blurred = boxBlurAlpha(alpha, width, height, Math.max(1, Math.round(feather)));
+    for (let i = 0; i < width * height; i += 1) px[i * 4 + 3] = blurred[i];
+    context.putImageData(imageData, 0, 0);
+}
+
+function boxBlurAlpha(src: Float32Array, width: number, height: number, radius: number) {
+    const tmp = new Float32Array(width * height);
+    const out = new Float32Array(width * height);
+    for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+            let sum = 0;
+            let count = 0;
+            for (let dx = -radius; dx <= radius; dx += 1) {
+                const nx = x + dx;
+                if (nx < 0 || nx >= width) continue;
+                sum += src[y * width + nx];
+                count += 1;
+            }
+            tmp[y * width + x] = sum / Math.max(1, count);
+        }
+    }
+    for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+            let sum = 0;
+            let count = 0;
+            for (let dy = -radius; dy <= radius; dy += 1) {
+                const ny = y + dy;
+                if (ny < 0 || ny >= height) continue;
+                sum += tmp[ny * width + x];
+                count += 1;
+            }
+            out[y * width + x] = sum / Math.max(1, count);
+        }
+    }
+    return out;
+}
+
+function normalizeRect(rect: MattingRect | undefined, width: number, height: number): MattingRect {
+    if (!rect) return { x: 0, y: 0, width, height };
+    const x = clamp(rect.x, 0, width);
+    const y = clamp(rect.y, 0, height);
+    const w = clamp(rect.width, 1, width - x);
+    const h = clamp(rect.height, 1, height - y);
+    return { x, y, width: w, height: h };
+}
+
+async function loadImageElement(source: string | Blob): Promise<HTMLImageElement> {
+    const url = typeof source === "string" ? source : URL.createObjectURL(source);
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = () => resolve(image);
+        image.onerror = () => {
+            if (typeof source !== "string") URL.revokeObjectURL(url);
+            reject(new Error("读取图片失败"));
+        };
+        image.src = url;
+    });
+}
+
+function cropFallback(source: string | Blob, rect?: MattingRect): Promise<string> {
+    return loadImageElement(source).then((image) => {
+        const r = normalizeRect(rect, image.width, image.height);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, r.width);
+        canvas.height = Math.max(1, r.height);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return typeof source === "string" ? source : canvas.toDataURL();
+        ctx.drawImage(image, r.x, r.y, r.width, r.height, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL("image/png");
+    });
+}
+
+function clamp(value: number, min: number, max: number) {
+    return Math.min(max, Math.max(min, value));
+}

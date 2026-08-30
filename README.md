@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/huahuazi/infinite-canvas"><img src="https://img.shields.io/github/stars/huahuazi/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
-  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.6.7-2563eb?style=flat-square" alt="Version"></a>
+  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.6.8-2563eb?style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f97316?style=flat-square" alt="License"></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white" alt="Docker ready"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16.2-000000?style=flat-square&logo=nextdotjs" alt="Next.js"></a>
@@ -37,6 +37,7 @@
 - **画布交互增强（新增）**：拖拽节点智能吸附对齐线（8px 阈值 + 蓝色参考线），图片视口外懒加载，多节点同屏更流畅
 - **工作流 ↔ 画布打通（新增）**：创作工作流运行结果一键批量落回画布，支持从画布导入图片节点作为参考图，VTO 批量出图全链路
 - **批量变量注入（新增）**：变量用 `|` 分隔多值，自动笛卡尔积展开批量生成（如 产品名=头饰A|头饰B 生成多张变体图）
+- **元素爆炸（新增）**：把一张图片识别并拆分成多个独立透明底 PNG（每个元素一张）——本地 RMBG-1.4 像素级抠图保真、零 token、原图不上传，仅对被遮挡有缺口的元素调用 AI 补全；支持 AI 自动识别 + 手动框选兜底
 - **本地 Agent（本次二开新增）**：通过本地 `canvas-agent` 服务把画布连接到 Codex、Claude Code、Gemini 等任意 Agent，Agent 通过 MCP 工具读取节点、创建节点、整理流程并触发生成
 - **生成参数增强（本次二开新增）**：透明背景、Reasoning Effort、自定义调用脚本，灵活适配各类中转站与自建服务
 - **插件化 Agent 接入（本次二开新增）**：提供 Codex / Claude Code / 通用 MCP 三套安装包，一行命令接入
