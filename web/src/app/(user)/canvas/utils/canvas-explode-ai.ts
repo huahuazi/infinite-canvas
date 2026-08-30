@@ -79,6 +79,7 @@ export async function explodeImageNodeAi(request: ExplodeRequest): Promise<Explo
             "请将该区域内的物体完整、独立地提取出来，生成一张透明背景的 PNG。",
             "严格要求：",
             "- 只保留被高亮标记区域内的物体本身",
+            "- 提取出来的元素不能有任何变化，包括色彩、构造、比例等，严格参考原样",
             "- 物体的材质、颜色、朝向、光影与参考图一致，保持完整不残缺",
             "- 背景完全透明，不要生成任何背景、台面、阴影或环境",
             "- 彩色高亮只是编辑标记，不要保留在最终图像中",
@@ -106,16 +107,7 @@ export async function explodeImageNodeAi(request: ExplodeRequest): Promise<Explo
                 { width: naturalWidth, height: naturalHeight },
             );
 
-            const backgroundPrompt = [
-                "参考图中有多处被彩色高亮标记的区域。",
-                "请把所有这些被标记区域内的物体从画面中移除，并用周围的环境内容自然补全被移除的位置。",
-                "严格要求：",
-                "- 只移除被彩色高亮标记区域内的物体，未标记区域保持原样",
-                "- 被移除的位置用周围的背景、纹理、光影自然衔接，看起来像原本就不存在该物体",
-                "- 保持整体构图、透视、光影和风格不变",
-                "- 彩色高亮只是编辑标记，不要保留在最终图像中",
-                "- 输出完整尺寸的图像，不要裁剪",
-            ].join("\n");
+            const backgroundPrompt = ["参考图中被彩色高亮覆盖的区域是需要移除的位置，彩色只是编辑标记，不要保留在最终图像中。", "只移除被高亮标记区域内的物体，其他区域的构图、人物、文字、光影和风格保持不变。"].join("\n");
 
             prepared.push({
                 kind: "background",
