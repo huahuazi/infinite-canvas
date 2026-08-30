@@ -2524,33 +2524,79 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const explodeImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageExplodePayload) => {
-            if (!node.metadata?.content) return;
+            if (!node.metadata?.content || !payload.elements.length) return;
             setExplodeNodeId(null);
             const hideExplodeLoading = message.loading("正在爆炸元素...", 0);
+            const baseGenerationConfig = buildGenerationConfig(effectiveConfig, node, "image");
 
             try {
                 const naturalWidth = node.metadata.naturalWidth || node.width;
                 const naturalHeight = node.metadata.naturalHeight || node.height;
-                const result = await executeExplodeImageNode({
+                const { prepared } = await executeExplodeImageNode({
                     source: node.metadata.content,
                     title: node.title,
                     elements: payload.elements,
-                    config: buildGenerationConfig(effectiveConfig, node, "image"),
+                    config: baseGenerationConfig,
                     sourceId: projectId,
                     naturalWidth,
                     naturalHeight,
                     origin: { x: node.position.x, y: node.position.y, width: node.width, height: node.height },
                     keepOriginal: payload.keepOriginal,
-                    onProgress: (msg) => hideExplodeLoading(),
+                    onProgress: () => {},
                 });
 
-                const allNodes = result.backgroundNode ? [...result.childNodes, result.backgroundNode] : result.childNodes;
-                setNodes((prev) => [...prev, ...allNodes]);
-                setConnections((prev) => [...prev, ...allNodes.map((child) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: child.id }))]);
-                setSelectedNodeIds(new Set(allNodes.map((child) => child.id)));
+                if (!prepared.length) {
+                    message.warning("没有可生成的元素任务");
+                    return;
+                }
+
+                // 为每个任务创建 loading 节点并提交，结果由全局轮询刷新
+                const newNodes: CanvasNodeData[] = [];
+                const newConnections: Array<{ id: string; fromNodeId: string; toNodeId: string }> = [];
+                const elementIds: string[] = [];
+                const elementTasks = prepared.filter((item) => item.kind === "element");
+                const backgroundTask = prepared.find((item) => item.kind === "background");
+
+                let index = 0;
+                for (const task of prepared) {
+                    const childId = nanoid();
+                    const clientTaskId = `explode_ai_${Date.now()}_${index}`;
+                    const generationConfig = { ...task.config, count: "1", size: node.metadata?.size || "auto" };
+                    const reference = { id: `${node.id}-${task.kind}-${index}`, name: task.referenceName, type: "image/png", dataUrl: task.referenceDataUrl, storageKey: undefined };
+                    const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [reference]);
+                    const childY = node.position.y + index * (node.height + 24);
+                    const childNode: CanvasNodeData = {
+                        id: childId,
+                        type: CanvasNodeType.Image,
+                        title: task.kind === "background" ? "背景补全.png" : `${task.name}.png`,
+                        position: { x: node.position.x + node.width + 96, y: childY },
+                        width: node.width,
+                        height: node.height,
+                        metadata: { prompt: task.prompt, status: NODE_STATUS_LOADING, startedAt: Date.now(), progress: 0, imageTaskId: clientTaskId, ...generationMetadata },
+                    };
+                    newNodes.push(childNode);
+                    newConnections.push({ id: nanoid(), fromNodeId: node.id, toNodeId: childId });
+                    if (task.kind === "element") elementIds.push(childId);
+                    index += 1;
+
+                    void createCanvasImageTask(generationConfig, task.prompt, [reference], { nodeId: childId, sourceId: projectId, clientTaskId })
+                        .then((created) => {
+                            setNodes((prev) => applyCanvasImageTaskUpdate(prev, childId, created, childNode.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }));
+                            setConnections((prev) => applyCanvasImageTaskConnections(prev, childId, created));
+                        })
+                        .catch((error) => {
+                            const errorDetails = error instanceof Error ? error.message : "元素生成失败";
+                            message.error(`${task.name}：${errorDetails}`);
+                            setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+                        });
+                }
+
+                setNodes((prev) => [...prev, ...newNodes]);
+                setConnections((prev) => [...prev, ...newConnections]);
+                setSelectedNodeIds(new Set(elementIds));
                 setSelectedConnectionId(null);
                 setDialogNodeId(null);
-                message.success(`已炸出 ${result.childNodes.length} 个元素 PNG${result.backgroundNode ? ` + 1 张背景补全图` : ""}`);
+                message.success(`已提交 ${elementTasks.length} 个元素 PNG${backgroundTask ? ` + 1 张背景补全图` : ""}，生成中…`);
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : "元素爆炸失败";
                 message.error(errorMessage);
