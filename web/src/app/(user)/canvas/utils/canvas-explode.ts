@@ -121,7 +121,8 @@ export async function explodeImageNode(request: ExplodeRequest): Promise<Explode
 
     // 若本地抠图模型全不可用且因此没有生成任何节点，向上抛错让 UI 明确提示
     if (!childNodes.length && mattingPreloadError) {
-        throw new Error(`本地抠图模型不可用（${mattingPreloadError.message}），元素爆炸未能生成`);
+        // mattingDataUrl 已抛「本地抠图模型不可用（原因）」，这里直接透传避免嵌套
+        throw mattingPreloadError;
     }
 
     return { childNodes, usedInpaint, occludedCount };
