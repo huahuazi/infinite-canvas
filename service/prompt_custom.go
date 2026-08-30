@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
@@ -57,9 +58,10 @@ func SyncCustomPromptCategory(category string) ([]model.PromptCategory, error) {
 //
 // 兼容常见格式，按优先级依次尝试：
 //  1. README.md 中 Markdown 标题 + 提示词代码块（### 标题 / **Prompt:** 代码块）
-//  2. JSON 数组（[{title, prompt}, ...]）
-//  3. prompts.json / data/*.json 数组
-//  4. 单行文本（每行一条 prompt，行首可选 "标题: prompt"）
+//  2. 仓库内的 cases-*.md / 全部 *.md 分片文件（逐个拉取解析合并，适合分片仓库）
+//  3. JSON 数组（[{title, prompt}, ...]）
+//  4. prompts.json / data/*.json 数组
+//  5. 单行文本（每行一条 prompt，行首可选 "标题: prompt"）
 func buildCustomPromptCategory(baseURL string) ([]model.Prompt, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
@@ -84,6 +86,11 @@ func buildCustomPromptCategory(baseURL string) ([]model.Prompt, error) {
 		}
 	}
 
+	// 读取仓库内的分片 Markdown 文件（cases-*.md 优先，其次所有 .md）
+	if items := buildCustomCaseFiles(rawBase); len(items) > 0 {
+		return items, nil
+	}
+
 	// 尝试 JSON 文件（常见命名）
 	for _, file := range []string{"prompts.json", "data/prompts.json", "data/ingested_tweets.json", "data/latest-prompts.json"} {
 		data, err := fetchText(rawBase, file)
@@ -102,6 +109,95 @@ func buildCustomPromptCategory(baseURL string) ([]model.Prompt, error) {
 		}
 	}
 	return []model.Prompt{}, nil
+}
+
+// buildCustomCaseFiles 列出仓库内 Markdown 分片文件并逐个解析合并。
+// 优先取 cases-*.md，其次取其余 *.md（跳过 README 与打包清单）。
+func buildCustomCaseFiles(rawBase string) []model.Prompt {
+	apiBase := normalizeGithubApiBase(rawBase)
+	files := listGithubMarkdownFiles(apiBase)
+	if len(files) == 0 {
+		return nil
+	}
+	var items []model.Prompt
+	for _, file := range files {
+		if data, err := fetchText(rawBase, file); err == nil {
+			if parsed := parseCustomMarkdownPrompts(rawBase, data); len(parsed) > 0 {
+				items = append(items, parsed...)
+			}
+		}
+	}
+	return items
+}
+
+// normalizeGithubApiBase 把 raw base 转成 GitHub contents API base（用于列文件）。
+// raw: https://raw.githubusercontent.com/owner/repo/branch[/path] -> https://api.github.com/repos/owner/repo/contents[/path]
+func normalizeGithubApiBase(rawBase string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(rawBase), "/")
+	prefix := "https://raw.githubusercontent.com/"
+	if !strings.HasPrefix(trimmed, prefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(trimmed, prefix)
+	parts := strings.Split(rest, "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	owner, repo, branch := parts[0], parts[1], parts[2]
+	path := ""
+	if len(parts) > 3 {
+		path = strings.Join(parts[3:], "/")
+	}
+	api := "https://api.github.com/repos/" + owner + "/" + repo + "/contents"
+	if path != "" {
+		api += "/" + path
+	}
+	return api + "?ref=" + branch
+}
+
+// listGithubMarkdownFiles 通过 GitHub contents API 列出仓库内可解析的 Markdown 分片文件。
+func listGithubMarkdownFiles(apiBase string) []string {
+	if apiBase == "" {
+		return nil
+	}
+	request, _ := http.NewRequest(http.MethodGet, apiBase, nil)
+	request.Header.Set("Accept", "application/vnd.github+json")
+	client := http.Client{Timeout: 20 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil
+	}
+	var entries []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&entries); err != nil {
+		return nil
+	}
+	var cases, others []string
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name)
+		if entry.Type != "file" || !strings.HasSuffix(strings.ToLower(name), ".md") {
+			continue
+		}
+		lower := strings.ToLower(name)
+		if strings.HasPrefix(lower, "readme") || strings.HasPrefix(lower, "changelog") || strings.HasPrefix(lower, "license") || strings.HasPrefix(lower, "contributing") || strings.HasPrefix(lower, "security") {
+			continue
+		}
+		if strings.HasPrefix(lower, "cases-") {
+			cases = append(cases, name)
+		} else {
+			others = append(others, name)
+		}
+	}
+	result := make([]string, 0, len(cases)+len(others))
+	result = append(result, cases...)
+	result = append(result, others...)
+	return result
 }
 
 // normalizeGithubRawBase 把 github.com 的仓库地址转成 raw.githubusercontent.com 的 base。
