@@ -24,7 +24,6 @@ type MaskElement = {
     id: string;
     name: string;
     canvas: HTMLCanvasElement; // 原图尺寸的涂抹 mask，黑色=选区
-    preview: HTMLCanvasElement; // 合成预览
     occludedToInpaint: boolean;
 };
 
@@ -39,6 +38,7 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
     const [detecting, setDetecting] = useState(false);
     const drawingRef = useRef<{ active: boolean; last: { x: number; y: number } | null }>({ active: false, last: null });
     const previewRef = useRef<HTMLDivElement>(null);
+    const displayCanvasRef = useRef<HTMLCanvasElement>(null);
 
     useEffect(() => {
         if (!open) return;
@@ -53,16 +53,23 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
 
     const activeElement = elements.find((item) => item.id === activeId) || null;
 
+    // 切换激活元素 / 图片尺寸变化时，把该元素的涂抹 mask 实时渲染到显示层
+    useEffect(() => {
+        if (!open || !image || !activeElement) return;
+        const node = displayCanvasRef.current;
+        if (!node) return;
+        node.width = image.width;
+        node.height = image.height;
+        renderPreview(activeElement.canvas, canvasHasPaint(activeElement.canvas));
+    }, [image, activeId, elements, open]);
+
     const addNewElement = () => {
         if (!image) return;
         const canvas = document.createElement("canvas");
         canvas.width = image.width;
         canvas.height = image.height;
-        const preview = document.createElement("canvas");
-        preview.width = image.width;
-        preview.height = image.height;
         const id = `mask-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        const item: MaskElement = { id, name: `元素 ${elements.length + 1}`, canvas, preview, occludedToInpaint: true };
+        const item: MaskElement = { id, name: `元素 ${elements.length + 1}`, canvas, occludedToInpaint: true };
         setElements((prev) => [...prev, item]);
         setActiveId(id);
         setMode("paint");
@@ -82,12 +89,13 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
         setElements((prev) => prev.map((item) => (item.id === id ? { ...item, occludedToInpaint: !item.occludedToInpaint } : item)));
     };
 
-    const renderPreview = (maskCanvas: HTMLCanvasElement, preview: HTMLCanvasElement, withBorder = false) => {
-        const ctx = preview.getContext("2d");
-        if (!ctx || !image) return;
-        ctx.clearRect(0, 0, preview.width, preview.height);
+    const renderPreview = (maskCanvas: HTMLCanvasElement, withBorder = false) => {
+        const node = displayCanvasRef.current;
+        const ctx = node?.getContext("2d");
+        if (!node || !ctx) return;
+        ctx.clearRect(0, 0, node.width, node.height);
         ctx.fillStyle = maskFillColor;
-        ctx.fillRect(0, 0, preview.width, preview.height);
+        ctx.fillRect(0, 0, node.width, node.height);
         ctx.globalCompositeOperation = "destination-in";
         ctx.drawImage(maskCanvas, 0, 0);
         ctx.globalCompositeOperation = "source-over";
@@ -117,7 +125,7 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
         } else {
             drawMaskStroke(ctx, drawingRef.current.last, point, brushSize);
         }
-        renderPreview(element.canvas, element.preview);
+        renderPreview(element.canvas);
         drawingRef.current.last = point;
     };
 
@@ -127,7 +135,7 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
         drawingRef.current = { active: true, last: null };
-        renderPreview(activeElement.canvas, activeElement.preview);
+        renderPreview(activeElement.canvas);
         draw(event, activeElement);
     };
 
@@ -140,7 +148,7 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
     const stopDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
         if (!activeElement) return;
         drawingRef.current = { active: false, last: null };
-        renderPreview(activeElement.canvas, activeElement.preview, canvasHasPaint(activeElement.canvas));
+        renderPreview(activeElement.canvas, canvasHasPaint(activeElement.canvas));
     };
 
     const runDetect = async () => {
@@ -160,17 +168,12 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
                         ctx.fillStyle = "#000";
                         ctx.fillRect(px.x, px.y, px.width, px.height);
                     }
-                    const preview = document.createElement("canvas");
-                    preview.width = canvas.width;
-                    preview.height = canvas.height;
                     const id = `mask-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-                    const el: MaskElement = { id, name: item.name, canvas, preview, occludedToInpaint: true };
+                    const el: MaskElement = { id, name: item.name, canvas, occludedToInpaint: true };
                     return el;
                 });
                 setElements((prev) => [...prev, ...next]);
                 setActiveId(next[0]?.id || null);
-                // 渲染预览
-                next.forEach((el) => renderPreview(el.canvas, el.preview, true));
                 message.success(`AI 识别出 ${next.length} 个元素，可用画笔精修选区`);
             } else {
                 if (result.error) message.warning(result.error);
@@ -205,19 +208,11 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
                         <img src={dataUrl} alt="" className="block max-h-[70vh] max-w-full bg-transparent" draggable={false} />
                         {image && activeElement ? (
                             <canvas
-                                key={activeElement.id}
+                                ref={displayCanvasRef}
                                 width={image.width}
                                 height={image.height}
                                 className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
                                 style={{ pointerEvents: "auto" }}
-                                ref={(node) => {
-                                    if (node && activeElement) {
-                                        // 用 active 元素自己的预览 canvas 覆盖显示
-                                        const previewCtx = node.getContext("2d");
-                                        previewCtx?.clearRect(0, 0, node.width, node.height);
-                                        previewCtx?.drawImage(activeElement.preview, 0, 0);
-                                    }
-                                }}
                                 onPointerDown={startDraw}
                                 onPointerMove={moveDraw}
                                 onPointerUp={stopDraw}

@@ -23,7 +23,6 @@ type MaskRegion = {
     id: string;
     prompt: string;
     canvas: HTMLCanvasElement; // 原图尺寸涂抹 mask
-    preview: HTMLCanvasElement; // 合成预览
 };
 
 export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: { dataUrl: string; open: boolean; onClose: () => void; onConfirm: (payload: CanvasRectEditPayload) => void }) {
@@ -34,6 +33,7 @@ export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: 
     const [mode, setMode] = useState<DrawMode>("paint");
     const [keepOriginal, setKeepOriginal] = useState(true);
     const drawingRef = useRef<{ active: boolean; last: { x: number; y: number } | null }>({ active: false, last: null });
+    const displayCanvasRef = useRef<HTMLCanvasElement>(null);
 
     useEffect(() => {
         if (!open) return;
@@ -47,16 +47,23 @@ export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: 
 
     const activeRegion = regions.find((item) => item.id === activeId) || null;
 
+    // 切换激活区域 / 图片尺寸变化时，把该区域的涂抹 mask 实时渲染到显示层
+    useEffect(() => {
+        if (!open || !image || !activeRegion) return;
+        const node = displayCanvasRef.current;
+        if (!node) return;
+        node.width = image.width;
+        node.height = image.height;
+        renderPreview(activeRegion.canvas);
+    }, [image, activeId, regions, open]);
+
     const addRegion = () => {
         if (!image) return;
         const canvas = document.createElement("canvas");
         canvas.width = image.width;
         canvas.height = image.height;
-        const preview = document.createElement("canvas");
-        preview.width = image.width;
-        preview.height = image.height;
         const id = `rect-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        const item: MaskRegion = { id, prompt: "", canvas, preview };
+        const item: MaskRegion = { id, prompt: "", canvas };
         setRegions((prev) => [...prev, item]);
         setActiveId(id);
     };
@@ -70,12 +77,13 @@ export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: 
         setRegions((prev) => prev.map((item) => (item.id === id ? { ...item, prompt } : item)));
     };
 
-    const renderPreview = (maskCanvas: HTMLCanvasElement, preview: HTMLCanvasElement) => {
-        const ctx = preview.getContext("2d");
-        if (!ctx) return;
-        ctx.clearRect(0, 0, preview.width, preview.height);
+    const renderPreview = (maskCanvas: HTMLCanvasElement) => {
+        const node = displayCanvasRef.current;
+        const ctx = node?.getContext("2d");
+        if (!node || !ctx) return;
+        ctx.clearRect(0, 0, node.width, node.height);
         ctx.fillStyle = maskFillColor;
-        ctx.fillRect(0, 0, preview.width, preview.height);
+        ctx.fillRect(0, 0, node.width, node.height);
         ctx.globalCompositeOperation = "destination-in";
         ctx.drawImage(maskCanvas, 0, 0);
         ctx.globalCompositeOperation = "source-over";
@@ -104,7 +112,7 @@ export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: 
         } else {
             drawMaskStroke(ctx, drawingRef.current.last, point, brushSize);
         }
-        renderPreview(region.canvas, region.preview);
+        renderPreview(region.canvas);
         drawingRef.current.last = point;
     };
 
@@ -114,7 +122,7 @@ export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: 
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
         drawingRef.current = { active: true, last: null };
-        renderPreview(activeRegion.canvas, activeRegion.preview);
+        renderPreview(activeRegion.canvas);
         draw(event, activeRegion);
     };
 
@@ -127,7 +135,7 @@ export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: 
     const stopDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
         if (!activeRegion) return;
         drawingRef.current = { active: false, last: null };
-        renderPreview(activeRegion.canvas, activeRegion.preview);
+        renderPreview(activeRegion.canvas);
     };
 
     const submit = () => {
@@ -147,17 +155,10 @@ export function CanvasNodeRectEditDialog({ dataUrl, open, onClose, onConfirm }: 
                         <img src={dataUrl} alt="" className="block max-h-[70vh] max-w-full bg-transparent" draggable={false} />
                         {image && activeRegion ? (
                             <canvas
-                                key={activeRegion.id}
+                                ref={displayCanvasRef}
                                 width={image.width}
                                 height={image.height}
                                 className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
-                                ref={(node) => {
-                                    if (node && activeRegion) {
-                                        const previewCtx = node.getContext("2d");
-                                        previewCtx?.clearRect(0, 0, node.width, node.height);
-                                        previewCtx?.drawImage(activeRegion.preview, 0, 0);
-                                    }
-                                }}
                                 onPointerDown={startDraw}
                                 onPointerMove={moveDraw}
                                 onPointerUp={stopDraw}
