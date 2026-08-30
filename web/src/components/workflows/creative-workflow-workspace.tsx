@@ -10,6 +10,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
 import { ModelPicker } from "@/components/model-picker";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
+import { CanvasNodeType } from "@/app/(user)/canvas/types";
+import { useCanvasStore } from "@/app/(user)/canvas/stores/use-canvas-store";
+import { postWorkflowImages } from "@/lib/canvas-workflow-bridge";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { createCanvasImageTask, requestEdit, requestGeneration, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
@@ -229,6 +232,8 @@ export function CreativeWorkflowWorkspace({
     const [inputValues, setInputValues] = useState<Record<string, string>>({});
     const [workflowReferences, setWorkflowReferences] = useState<ReferenceImage[]>([]);
     const workflowReferenceInputRef = useRef<HTMLInputElement>(null);
+    const [workflowCanvasPickerOpen, setWorkflowCanvasPickerOpen] = useState(false);
+    const [workflowCanvasProjectId, setWorkflowCanvasProjectId] = useState<string | null>(null);
     const [workflowAssetPickerOpen, setWorkflowAssetPickerOpen] = useState(false);
     const [runResults, setRunResults] = useState<WorkflowRunResult[]>([]);
     const [workflowTasks, setWorkflowTasks] = useState<WorkflowTask[]>([]);
@@ -264,6 +269,10 @@ export function CreativeWorkflowWorkspace({
     const workflowCategories = useMemo(() => Array.from(new Set(workflows.map((workflow) => workflow.category || "未分类"))).sort((a, b) => a.localeCompare(b, "zh-CN")), [workflows]);
 
     const renderedPrompt = useMemo(() => (runningWorkflow ? renderWorkflowPrompt(runningWorkflow, inputValues) : ""), [inputValues, runningWorkflow]);
+    const batchComboCount = useMemo(() => {
+        if (!runningWorkflow || runningWorkflow.mode === "multi_image_series") return 1;
+        return expandBatchCombinations(runningWorkflow, inputValues)?.length ?? 1;
+    }, [inputValues, runningWorkflow]);
     const runningTaskCount = workflowTasks.filter((task) => task.status === "running").length;
     const activeSeriesDrafts = seriesDrafts.filter((item) => item.status !== "success");
     const agentModel = agentTextModel || effectiveConfig.textModel || "";
@@ -361,6 +370,29 @@ export function CreativeWorkflowWorkspace({
             }),
         );
         setWorkflowReferences((value) => [...value, ...next]);
+    };
+
+    // 从画布项目导入图片节点作为工作流参考图（VTO 批量出图核心闭环）
+    const importCanvasProjectNodeAsReference = (projectId: string, nodeId: string) => {
+        const project = useCanvasStore.getState().projects.find((item) => item.id === projectId);
+        if (!project) return;
+        const node = project.nodes.find((item) => item.id === nodeId);
+        if (!node || !node.metadata?.content) {
+            message.warning("该节点没有可用图片");
+            return;
+        }
+        setWorkflowReferences((value) => [
+            ...value,
+            {
+                id: nanoid(),
+                name: node.title || `canvas-${nodeId.slice(-6)}.png`,
+                type: node.metadata.mimeType || "image/png",
+                dataUrl: node.metadata.content,
+                storageKey: node.metadata.storageKey,
+            },
+        ]);
+        setWorkflowCanvasPickerOpen(false);
+        message.success("已从画布导入参考图");
     };
 
     const removeWorkflowReference = async (id: string) => {
@@ -586,6 +618,19 @@ export function CreativeWorkflowWorkspace({
             await generateSeriesPromptDrafts();
             return;
         }
+
+        // 批量变量注入：填了多值（用 | 分隔）时笛卡尔积展开，逐组启动任务
+        const combinations = expandBatchCombinations(runningWorkflow, inputValues);
+        if (combinations && combinations.length > 1) {
+            const totalCount = combinations.length;
+            message.success(`检测到批量变量：${totalCount} 组组合，开始批量生成`);
+            for (const combo of combinations) {
+                const prompt = renderWorkflowPrompt(runningWorkflow, combo);
+                void startWorkflowImageTask(runningWorkflow, prompt, { ...combo }, [...workflowReferences]);
+            }
+            return;
+        }
+
         void startWorkflowImageTask(runningWorkflow, renderedPrompt, { ...inputValues }, [...workflowReferences]);
     };
 
@@ -910,6 +955,18 @@ export function CreativeWorkflowWorkspace({
             );
             setRunResults((value) => [...nextResults, ...value]);
             onWorkflowTaskSuccess?.({ taskId, images: nextResults, durationMs, endedAt: finishedAt });
+            if (nextResults.length) {
+                postWorkflowImages(
+                    nextResults.map((image) => ({
+                        imageUrl: image.displayUrl,
+                        storageKey: image.storageKey,
+                        prompt: image.prompt,
+                        workflowName: image.workflowName,
+                        width: image.width,
+                        height: image.height,
+                    })),
+                );
+            }
             message.success("工作流运行完成，结果已写入生图历史");
         } catch (error) {
             const finishedAt = Date.now();
@@ -1184,6 +1241,7 @@ export function CreativeWorkflowWorkspace({
                         <div className="space-y-3">
                             <div className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                                 <div className="text-sm font-medium">变量输入</div>
+                                <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">支持批量：用 <code className="rounded bg-stone-200 px-1 dark:bg-stone-800">|</code> 分隔多值可自动笛卡尔积批量生成（如 产品名=头饰A|头饰B）</p>
                                 <div className="mt-3 space-y-3">
                                     {runningWorkflow.variables.map((variable) => (
                                         <WorkflowVariableInput key={variable.id} variable={variable} value={inputValues[variable.key] || ""} onChange={(value) => setInputValues((current) => ({ ...current, [variable.key]: value }))} />
@@ -1197,6 +1255,9 @@ export function CreativeWorkflowWorkspace({
                                     <div className="flex gap-2">
                                         <Button size="small" onClick={() => setWorkflowAssetPickerOpen(true)}>
                                             我的素材
+                                        </Button>
+                                        <Button size="small" onClick={() => setWorkflowCanvasPickerOpen(true)}>
+                                            从画布
                                         </Button>
                                         <Button size="small" onClick={() => workflowReferenceInputRef.current?.click()}>
                                             上传
@@ -1236,6 +1297,11 @@ export function CreativeWorkflowWorkspace({
                                     <div className="mt-3 rounded-md border border-dashed border-stone-300 py-5 text-center text-xs text-stone-500 dark:border-stone-800">未添加参考图</div>
                                 )}
                             </div>
+                            {runningWorkflow.mode !== "multi_image_series" && batchComboCount > 1 ? (
+                                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-600 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-300">
+                                    检测到批量变量：将生成 <b>{batchComboCount}</b> 张图（{batchComboCount} 组组合）
+                                </div>
+                            ) : null}
                             <Button block type="primary" size="large" loading={seriesDraftLoading} icon={runningWorkflow.mode === "multi_image_series" ? <Layers3 className="size-4" /> : <Play className="size-4" />} onClick={() => void runWorkflow()}>
                                 {runningWorkflow.mode === "multi_image_series" ? "生成提示词" : "启动任务"}
                             </Button>
@@ -1308,7 +1374,66 @@ export function CreativeWorkflowWorkspace({
             </Modal>
             <AssetPickerModal open={agentAssetPickerOpen} defaultTab="my-assets" onInsert={insertAgentAsset} onClose={() => setAgentAssetPickerOpen(false)} />
             <AssetPickerModal open={workflowAssetPickerOpen} defaultTab="my-assets" onInsert={insertWorkflowAsset} onClose={() => setWorkflowAssetPickerOpen(false)} />
+
+            {/* 从画布导入参考图（VTO 批量出图核心闭环） */}
+            <Modal
+                open={workflowCanvasPickerOpen}
+                title="从画布导入参考图"
+                footer={null}
+                onCancel={() => setWorkflowCanvasPickerOpen(false)}
+                width={520}
+            >
+                <div className="space-y-3">
+                    <Select
+                        allowClear
+                        placeholder="选择一个画布项目"
+                        className="w-full"
+                        value={workflowCanvasProjectId || undefined}
+                        onChange={(value) => setWorkflowCanvasProjectId(value || null)}
+                        options={useCanvasStore.getState().projects.map((project) => ({ value: project.id, label: project.title }))}
+                    />
+                    {workflowCanvasProjectId ? (
+                        <CanvasImageNodeGrid projectId={workflowCanvasProjectId} onPick={(nodeId) => importCanvasProjectNodeAsReference(workflowCanvasProjectId, nodeId)} />
+                    ) : (
+                        <div className="rounded-md border border-dashed border-stone-300 py-6 text-center text-xs text-stone-500 dark:border-stone-800">
+                            选择画布项目后，列出其中的图片节点作为参考图
+                        </div>
+                    )}
+                </div>
+            </Modal>
         </main>
+    );
+}
+
+function CanvasImageNodeGrid({ projectId, onPick }: { projectId: string; onPick: (nodeId: string) => void }) {
+    const project = useCanvasStore((state) => state.projects.find((item) => item.id === projectId));
+    const imageNodes = (project?.nodes || []).filter(
+        (node) => (node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Panorama) && Boolean(node.metadata?.content),
+    );
+    if (!imageNodes.length) {
+        return (
+            <div className="rounded-md border border-dashed border-stone-300 py-6 text-center text-xs text-stone-500 dark:border-stone-800">
+                该项目没有图片节点
+            </div>
+        );
+    }
+    return (
+        <div className="grid max-h-[300px] grid-cols-4 gap-2 overflow-y-auto">
+            {imageNodes.map((node) => (
+                <button
+                    key={node.id}
+                    type="button"
+                    className="group relative overflow-hidden rounded-md border border-stone-200 transition hover:border-blue-400 hover:ring-2 hover:ring-blue-200 dark:border-stone-800 dark:hover:border-blue-500 dark:hover:ring-blue-900"
+                    onClick={() => onPick(node.id)}
+                    title={node.title || "导入此节点"}
+                >
+                    <img src={node.metadata!.content!} alt={node.title || "画布节点"} className="aspect-square w-full object-cover" />
+                    <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/60 px-1.5 py-0.5 text-left text-[10px] text-white opacity-0 transition group-hover:opacity-100">
+                        {node.title || "节点"}
+                    </span>
+                </button>
+            ))}
+        </div>
     );
 }
 
@@ -1872,6 +1997,36 @@ function renderWorkflowPrompt(workflow: CreativeWorkflow, values: Record<string,
     const prompt = renderPromptTemplate(workflow.config.promptTemplate, formattedValues).trim();
     const negativePrompt = workflow.config.negativePrompt.trim();
     return negativePrompt ? `${prompt}\n\n避免：${negativePrompt}` : prompt;
+}
+
+/**
+ * 批量变量注入：把填了多值（用 `|` 分隔）的变量做笛卡尔积展开。
+ * 例：产品名="头饰A|头饰B", 佩戴位="头顶|侧边" -> 4 组组合
+ * 返回 null 表示没有多值（单组），返回数组表示 N 组 inputValues。
+ */
+function expandBatchCombinations(workflow: CreativeWorkflow, values: Record<string, string>): Record<string, string>[] | null {
+    const multiVars: { key: string; options: string[] }[] = [];
+    for (const variable of workflow.variables) {
+        if (variable.type === "boolean") continue;
+        const raw = String(values[variable.key] ?? variable.defaultValue ?? "");
+        if (!raw.includes("|")) continue;
+        const options = raw.split("|").map((item) => item.trim()).filter(Boolean);
+        if (options.length > 1) multiVars.push({ key: variable.key, options });
+    }
+    if (!multiVars.length) return null;
+
+    // 笛卡尔积
+    let combinations: Record<string, string>[] = [{ ...values }];
+    for (const { key, options } of multiVars) {
+        const next: Record<string, string>[] = [];
+        for (const combo of combinations) {
+            for (const option of options) {
+                next.push({ ...combo, [key]: option });
+            }
+        }
+        combinations = next;
+    }
+    return combinations;
 }
 
 function formatWorkflowVariableValue(variable: WorkflowVariable, value: string | undefined) {

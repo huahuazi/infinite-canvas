@@ -14,6 +14,7 @@ import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_IN
 import { channelProtocolForConfig, defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
+import { postWorkflowImages, subscribeWorkflowImages, type CanvasWorkflowImage } from "@/lib/canvas-workflow-bridge";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -370,6 +371,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [pendingConnectionCreate, setPendingConnectionCreate] = useState<PendingConnectionCreate | null>(null);
     const [mouseWorld, setMouseWorld] = useState<Position>({ x: 0, y: 0 });
     const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
+    const [snapGuides, setSnapGuides] = useState<{ vertical: number[]; horizontal: number[] }>({ vertical: [], horizontal: [] });
+    const snapRef = useRef<{ vertical: number[]; horizontal: number[] }>({ vertical: [], horizontal: [] });
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [nodeCreatePosition, setNodeCreatePosition] = useState<Position | null>(null);
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
@@ -1392,6 +1395,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         }
         if (!dragRef.current.isDraggingNode) {
             setDropTargetGroupId(null);
+            snapRef.current = { vertical: [], horizontal: [] };
+            setSnapGuides({ vertical: [], horizontal: [] });
             return;
         }
 
@@ -1402,6 +1407,46 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         const dy = clientY == null ? 0 : (clientY - dragRef.current.startY) / currentViewport.k;
         const initialPositions = dragRef.current.initialSelectedNodes;
 
+        // 松手落定也应用吸附，保持与拖拽预览一致
+        let snapOffsetX = 0;
+        let snapOffsetY = 0;
+        const anchor = initialPositions[0];
+        if (anchor) {
+            const k = currentViewport.k;
+            const SNAP_DIST = 8 / k;
+            const draggedIds = new Set(initialPositions.map((item) => item.id));
+            const vLines: number[] = [];
+            const hLines: number[] = [];
+            nodesRef.current.forEach((n) => {
+                if (draggedIds.has(n.id)) return;
+                vLines.push(n.position.x + n.width / 2);
+                hLines.push(n.position.y + n.height / 2);
+            });
+            const anchorNode = nodesRef.current.find((n) => n.id === anchor.id);
+            const cursorWorldX = anchor.x + dx + (anchorNode?.width ?? 0) / 2;
+            const cursorWorldY = anchor.y + dy + (anchorNode?.height ?? 0) / 2;
+            const vHit: number[] = [];
+            const hHit: number[] = [];
+            for (const line of vLines) {
+                if (Math.abs(cursorWorldX - line) < SNAP_DIST) {
+                    snapOffsetX = line - (anchorNode?.width ?? 0) / 2 - (anchor.x + dx);
+                    vHit.push(line);
+                }
+            }
+            for (const line of hLines) {
+                if (Math.abs(cursorWorldY - line) < SNAP_DIST) {
+                    snapOffsetY = line - (anchorNode?.height ?? 0) / 2 - (anchor.y + dy);
+                    hHit.push(line);
+                }
+            }
+            snapRef.current = { vertical: vHit, horizontal: hHit };
+            setSnapGuides(snapRef.current);
+        }
+        const finalDx = dx + snapOffsetX;
+        const finalDy = dy + snapOffsetY;
+        const snapDx = clientX == null ? 0 : finalDx;
+        const snapDy = clientY == null ? 0 : finalDy;
+
         historyPausedRef.current = false;
         nodeDraggingRef.current = false;
         setIsNodeDragging(false);
@@ -1410,7 +1455,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setNodes((prev) => {
                 const moved = prev.map((node) => {
                     const initial = initialPositions.find((item) => item.id === node.id);
-                    return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
+                    return initial ? { ...node, position: { x: initial.x + snapDx, y: initial.y + snapDy } } : node;
                 });
                 const targetGroup = findGroupDropTarget(movedIds, moved);
                 if (targetGroup) return snapNodesIntoGroup(movedIds, moved, targetGroup);
@@ -1427,6 +1472,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         dragRef.current.clickedGroupId = null;
         dragRef.current.initialSelectedNodes = [];
         setDropTargetGroupId(null);
+        snapRef.current = { vertical: [], horizontal: [] };
+        setSnapGuides({ vertical: [], horizontal: [] });
         if (wasClick && clickedNodeId) {
             const clickedNode = nodesRef.current.find((node) => node.id === clickedNodeId);
             if (clickedNode?.type === CanvasNodeType.Group) {
@@ -1451,10 +1498,48 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     dragRef.current.hasMoved = true;
                 }
 
+                // 计算吸附（仅对第一个拖拽节点做锚点对齐，偏移应用到全部拖拽节点）
+                const anchor = initialPositions[0];
+                let snapOffsetX = 0;
+                let snapOffsetY = 0;
+                if (anchor) {
+                    const anchorNode = nodesRef.current.find((n) => n.id === anchor.id);
+                    const k = currentViewport.k;
+                    const SNAP_DIST = 8 / k;
+                    const draggedIds = new Set(initialPositions.map((item) => item.id));
+                    const vLines: number[] = [];
+                    const hLines: number[] = [];
+                    nodesRef.current.forEach((n) => {
+                        if (draggedIds.has(n.id)) return;
+                        vLines.push(n.position.x + n.width / 2);
+                        hLines.push(n.position.y + n.height / 2);
+                    });
+                    const cursorWorldX = anchor.x + dx + (anchorNode?.width ?? 0) / 2;
+                    const cursorWorldY = anchor.y + dy + (anchorNode?.height ?? 0) / 2;
+                    const vHit: number[] = [];
+                    const hHit: number[] = [];
+                    for (const line of vLines) {
+                        if (Math.abs(cursorWorldX - line) < SNAP_DIST) {
+                            snapOffsetX = line - (anchorNode?.width ?? 0) / 2 - (anchor.x + dx);
+                            vHit.push(line);
+                        }
+                    }
+                    for (const line of hLines) {
+                        if (Math.abs(cursorWorldY - line) < SNAP_DIST) {
+                            snapOffsetY = line - (anchorNode?.height ?? 0) / 2 - (anchor.y + dy);
+                            hHit.push(line);
+                        }
+                    }
+                    snapRef.current = { vertical: vHit, horizontal: hHit };
+                    setSnapGuides(snapRef.current);
+                }
+                const finalDx = dx + snapOffsetX;
+                const finalDy = dy + snapOffsetY;
+
                 const movedIds = new Set(initialPositions.map((item) => item.id));
                 const previewNodes = nodesRef.current.map((node) => {
                     const initial = initialPositions.find((item) => item.id === node.id);
-                    return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
+                    return initial ? { ...node, position: { x: initial.x + finalDx, y: initial.y + finalDy } } : node;
                 });
                 setDropTargetGroupId(findGroupDropTarget(movedIds, previewNodes)?.id || null);
 
@@ -1463,7 +1548,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     setNodes((prev) =>
                         prev.map((node) => {
                             const initial = initialPositions.find((item) => item.id === node.id);
-                            return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
+                            return initial ? { ...node, position: { x: initial.x + finalDx, y: initial.y + finalDy } } : node;
                         }),
                     );
                     rafRef.current = null;
@@ -3689,6 +3774,28 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         insertAssetAtRef.current = insertAssetAt;
     });
 
+    // 订阅工作流页推送的生成结果，自动落到画布中心
+    const insertAssistantImageRef = useRef(insertAssistantImage);
+    useLayoutEffect(() => {
+        insertAssistantImageRef.current = insertAssistantImage;
+    });
+    useEffect(() => {
+        const unsubscribe = subscribeWorkflowImages(async (images: CanvasWorkflowImage[]) => {
+            const center = getCanvasCenter();
+            for (const [index, image] of images.entries()) {
+                const url = image.storageKey ? await resolveImageUrl(image.storageKey, image.imageUrl) : image.imageUrl;
+                if (!url) continue;
+                const position = { x: center.x + (index - (images.length - 1) / 2) * 360, y: center.y };
+                await insertAssistantImageRef.current(
+                    { id: `workflow-${Date.now()}-${index}`, dataUrl: url, prompt: image.prompt || image.workflowName || "工作流结果", storageKey: image.storageKey || "", source: "asset" },
+                    position,
+                );
+            }
+        });
+        return unsubscribe;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [getCanvasCenter]);
+
     useEffect(() => {
         if (!projectLoaded || consumedAgentRequestProjectRef.current === projectId) return;
         const request = useCanvasStore.getState().projects.find((project) => project.id === projectId)?.pendingAgentRequest;
@@ -3983,6 +4090,17 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     ))}
 
                     {referencePickerNodeId ? <button type="button" className="absolute left-1/2 top-4 z-[90] -translate-x-1/2 rounded-full border px-4 py-2 text-sm font-medium shadow-lg backdrop-blur" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border }} onClick={exitNodeReferenceSelection}>从画布选择参考 · ESC 返回输入框</button> : null}
+
+                    {snapGuides.vertical.length || snapGuides.horizontal.length ? (
+                        <div className="pointer-events-none absolute inset-0 z-[95] overflow-hidden">
+                            {snapGuides.vertical.map((worldX, i) => (
+                                <div key={`v${i}`} className="absolute top-0 h-full w-px" style={{ left: worldX * viewport.k + viewport.x, background: "#2f80ff", opacity: 0.55, boxShadow: "0 0 0 1px rgba(47,128,255,0.16)" }} />
+                            ))}
+                            {snapGuides.horizontal.map((worldY, i) => (
+                                <div key={`h${i}`} className="absolute left-0 w-full h-px" style={{ top: worldY * viewport.k + viewport.y, background: "#2f80ff", opacity: 0.55, boxShadow: "0 0 0 1px rgba(47,128,255,0.16)" }} />
+                            ))}
+                        </div>
+                    ) : null}
 
                     {selectionBox ? (
                         <svg

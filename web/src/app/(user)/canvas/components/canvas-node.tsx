@@ -775,6 +775,8 @@ function ImageContent({
                         src={node.metadata!.content!}
                         alt={node.title}
                         draggable={false}
+                        loading="lazy"
+                        decoding="async"
                         onDragStart={(event) => event.preventDefault()}
                         className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`}
                     />
