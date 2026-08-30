@@ -15,7 +15,8 @@ import { detectOccluded, inpaintElement, type DetectedElement } from "@/lib/expl
 
 export type ExplodeElementOption = {
     name: string;
-    bbox: MattingRect;
+    bbox?: MattingRect; // 归一化 0~1 包围盒（有 mask 时由 mask 包围盒优先）
+    maskCanvas?: HTMLCanvasElement; // 用户画笔涂抹的自由选区（与原图同尺寸像素）
     occludedToInpaint?: boolean; // 用户是否勾选"补全缺口"
 };
 
@@ -51,7 +52,11 @@ export async function explodeImageNode(request: ExplodeRequest): Promise<Explode
         onProgress?.(`正在抠图 ${i + 1}/${elements.length}：${element.name}`);
 
         // 1) 本地 RMBG 像素级抠图（保真）
-        const dataUrl = await mattingDataUrl(source, { rect: toPixelRect(element.bbox, request.naturalWidth, request.naturalHeight) });
+        //    有自由涂抹 mask 时，mask 包围盒优先作为 ROI；否则用 bbox
+        const dataUrl = await mattingDataUrl(source, {
+            ...(element.maskCanvas ? { maskCanvas: element.maskCanvas } : {}),
+            ...(element.bbox && !element.maskCanvas ? { rect: toPixelRect(element.bbox, request.naturalWidth, request.naturalHeight) } : {}),
+        });
 
         // 2) 检测缺口（该元素是否被遮挡）
         const occluded = await detectOcclusionFromSource(dataUrl);
@@ -63,7 +68,8 @@ export async function explodeImageNode(request: ExplodeRequest): Promise<Explode
             usedInpaint = true;
             occludedCount += 1;
             try {
-                const inpainted = await inpaintElement(dataUrl, { name: element.name, bbox: toPixelRect(element.bbox, request.naturalWidth, request.naturalHeight), occluded }, { config, sourceId });
+                const elementRect = element.maskCanvas ? maskBoundsToPixelRect(element.maskCanvas) : toPixelRect(element.bbox!, request.naturalWidth, request.naturalHeight);
+                const inpainted = await inpaintElement(dataUrl, { name: element.name, bbox: elementRect, occluded }, { config, sourceId });
                 if (inpainted.dataUrl) {
                     finalDataUrl = inpainted.dataUrl;
                 }
@@ -128,6 +134,31 @@ function toPixelRect(bbox: MattingRect, width: number, height: number): MattingR
         width: Math.max(1, Math.min(width - bbox.x, bbox.width)),
         height: Math.max(1, Math.min(height - bbox.y, bbox.height)),
     };
+}
+
+// 从用户涂抹 mask（原图尺寸）计算非空像素包围盒（像素坐标）
+function maskBoundsToPixelRect(maskCanvas: HTMLCanvasElement): MattingRect {
+    const ctx = maskCanvas.getContext("2d");
+    const { width, height } = maskCanvas;
+    if (!ctx || !width || !height) return { x: 0, y: 0, width, height };
+    const data = ctx.getImageData(0, 0, width, height).data;
+    let minX = width;
+    let minY = height;
+    let maxX = 0;
+    let maxY = 0;
+    for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+            const idx = (y * width + x) * 4 + 3;
+            if (data[idx] > 8) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+    if (maxX < minX || maxY < minY) return { x: 0, y: 0, width, height };
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 async function uploadImageDataUrl(dataUrl: string): Promise<UploadedImage> {

@@ -15,6 +15,7 @@ export type MattingRect = {
 
 export type MattingOptions = {
     rect?: MattingRect; // 目标区域；不传则整图抠
+    maskCanvas?: HTMLCanvasElement; // 用户画笔涂抹的自由选区遮罩（与原图同尺寸），抠图结果与此遮罩求交
     feather?: number; // 边缘羽化半径（默认 2）
     maxEdge?: number; // 处理长边上限（默认 2048），超限先缩放
 };
@@ -111,16 +112,54 @@ export async function mattingDataUrl(source: string | Blob, options: MattingOpti
         return cropFallback(source, options.rect);
     }
 
-    const roiUrl = await buildRoi(source, options);
+    // 若用户提供了自由涂抹 mask，用其非空包围盒计算紧致 ROI（优于手动画框）
+    const mergedOptions = await applyUserMaskRect(options);
+
+    const roiUrl = await buildRoi(source, mergedOptions);
     try {
         const result = await runner(roiUrl);
         const output = result?.output;
         if (!output) return cropFallback(source, options.rect);
-        return await compositeMatting(roiUrl, output as { data?: Uint8ClampedArray; width?: number; height?: number }, options);
+        return await compositeMatting(roiUrl, output as { data?: Uint8ClampedArray; width?: number; height?: number }, mergedOptions);
     } catch (error) {
         console.warn("[segment-matting] 抠图失败，降级", error);
         return cropFallback(source, options.rect);
     }
+}
+
+// 若传了 maskCanvas，从其非空像素计算包围盒作为 rect（紧致 ROI）
+async function applyUserMaskRect(options: MattingOptions): Promise<MattingOptions> {
+    if (!options.maskCanvas) return options;
+    const mask = options.maskCanvas;
+    const ctx = mask.getContext("2d");
+    if (!ctx) return options;
+    const { width, height } = mask;
+    const data = ctx.getImageData(0, 0, width, height).data;
+    let minX = width;
+    let minY = height;
+    let maxX = 0;
+    let maxY = 0;
+    for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+            const idx = (y * width + x) * 4 + 3;
+            if (data[idx] > 8) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+    if (maxX < minX || maxY < minY) return options;
+    const pad = Math.max(2, Math.round(Math.min(width, height) / 120));
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(width, maxX + pad);
+    maxY = Math.min(height, maxY + pad);
+    return {
+        ...options,
+        rect: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+    };
 }
 
 async function buildRoi(source: string | Blob, options: MattingOptions): Promise<string> {
@@ -160,11 +199,41 @@ async function compositeMatting(roiUrl: string, output: { data?: Uint8ClampedArr
     context.drawImage(maskCanvas, 0, 0, width, height);
     context.restore();
 
+    // 若用户提供了自由涂抹选区 mask（与原图同尺寸），裁剪出对应 ROI 后与 RMBG mask 求交
+    if (options.maskCanvas && options.rect) {
+        const userMask = cropMaskToRoi(options.maskCanvas, options.rect, width, height);
+        if (userMask) {
+            context.save();
+            context.globalCompositeOperation = "destination-in";
+            context.drawImage(userMask, 0, 0, width, height);
+            context.restore();
+        }
+    }
+
     if (feather > 0) {
         featherAlpha(context, width, height, feather);
     }
 
     return canvas.toDataURL("image/png");
+}
+
+// 把原图尺寸的用户涂抹 mask，裁剪/缩放到 ROI 尺寸（与 roiImage 一致）
+function cropMaskToRoi(maskCanvas: HTMLCanvasElement, rect: MattingRect, roiWidth: number, roiHeight: number): HTMLCanvasElement | null {
+    const src = document.createElement("canvas");
+    src.width = maskCanvas.width;
+    src.height = maskCanvas.height;
+    const srcCtx = src.getContext("2d");
+    if (!srcCtx) return null;
+    srcCtx.drawImage(maskCanvas, 0, 0);
+
+    const dst = document.createElement("canvas");
+    dst.width = roiWidth;
+    dst.height = roiHeight;
+    const dstCtx = dst.getContext("2d");
+    if (!dstCtx) return null;
+    dstCtx.imageSmoothingEnabled = true;
+    dstCtx.drawImage(src, rect.x, rect.y, rect.width, rect.height, 0, 0, roiWidth, roiHeight);
+    return dst;
 }
 
 async function toMaskCanvas(output: { data?: Uint8ClampedArray; width?: number; height?: number }, targetWidth: number, targetHeight: number): Promise<HTMLCanvasElement | null> {

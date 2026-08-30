@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { App, Button, Checkbox, Input, Modal, Tag } from "antd";
-import { Bomb, Plus, ScanSearch, Trash2, WandSparkles, X } from "lucide-react";
+import { App, Button, Checkbox, Input, Modal, Slider, Tag } from "antd";
+import { Bomb, Brush, Eraser, Plus, ScanSearch, Trash2, WandSparkles, X } from "lucide-react";
 
 import { readImageMeta } from "@/lib/image-utils";
 import { downloadRemoteMedia } from "@/services/file-storage";
@@ -16,38 +16,132 @@ export type CanvasImageExplodePayload = {
     keepOriginal: boolean;
 };
 
-type DrawMode = "draw" | "delete";
-type DragHandle = "move" | "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
-const handles: DragHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+type DrawMode = "paint" | "erase";
+const defaultBrushSize = 90;
+const maskFillColor = "rgba(37, 99, 235, .38)";
+
+type MaskElement = {
+    id: string;
+    name: string;
+    canvas: HTMLCanvasElement; // 原图尺寸的涂抹 mask，黑色=选区
+    preview: HTMLCanvasElement; // 合成预览
+    occludedToInpaint: boolean;
+};
 
 export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConfirm }: { dataUrl: string; open: boolean; config: AiConfig; onClose: () => void; onConfirm: (payload: CanvasImageExplodePayload) => void }) {
     const { message } = App.useApp();
     const [image, setImage] = useState<{ width: number; height: number } | null>(null);
-    const [elements, setElements] = useState<CanvasElement[]>([]);
-    const [activeBox, setActiveBox] = useState<number | null>(null);
-    const [mode, setMode] = useState<DrawMode>("draw");
-    const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-    const [inpaintKeys, setInpaintKeys] = useState<Set<string>>(new Set());
+    const [elements, setElements] = useState<MaskElement[]>([]);
+    const [activeId, setActiveId] = useState<string | null>(null);
+    const [brushSize, setBrushSize] = useState(defaultBrushSize);
+    const [mode, setMode] = useState<DrawMode>("paint");
     const [keepOriginal, setKeepOriginal] = useState(true);
     const [detecting, setDetecting] = useState(false);
-    const [manualRect, setManualRect] = useState<{ start: { x: number; y: number }; current: { x: number; y: number } } | null>(null);
-    const [dragging, setDragging] = useState<{ idx: number; handle: DragHandle; start: { x: number; y: number }; rect: MattingRect } | null>(null);
+    const drawingRef = useRef<{ active: boolean; last: { x: number; y: number } | null }>({ active: false, last: null });
     const previewRef = useRef<HTMLDivElement>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         if (!open) return;
-        setMode("draw");
-        setActiveBox(null);
-        setSelectedKeys(new Set());
-        setInpaintKeys(new Set());
-        setKeepOriginal(true);
         setElements([]);
+        setActiveId(null);
+        setBrushSize(defaultBrushSize);
+        setMode("paint");
+        setKeepOriginal(true);
         setDetecting(false);
-        setManualRect(null);
-        setDragging(null);
         void readImageMeta(dataUrl).then(setImage);
     }, [dataUrl, open]);
+
+    const activeElement = elements.find((item) => item.id === activeId) || null;
+
+    const addNewElement = () => {
+        if (!image) return;
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const preview = document.createElement("canvas");
+        preview.width = image.width;
+        preview.height = image.height;
+        const id = `mask-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const item: MaskElement = { id, name: `元素 ${elements.length + 1}`, canvas, preview, occludedToInpaint: true };
+        setElements((prev) => [...prev, item]);
+        setActiveId(id);
+        setMode("paint");
+        if (previewRef.current) previewRef.current.style.cursor = "crosshair";
+    };
+
+    const deleteElement = (id: string) => {
+        setElements((prev) => prev.filter((item) => item.id !== id));
+        setActiveId((prev) => (prev === id ? null : prev));
+    };
+
+    const renameElement = (id: string, name: string) => {
+        setElements((prev) => prev.map((item) => (item.id === id ? { ...item, name } : item)));
+    };
+
+    const toggleInpaint = (id: string) => {
+        setElements((prev) => prev.map((item) => (item.id === id ? { ...item, occludedToInpaint: !item.occludedToInpaint } : item)));
+    };
+
+    const renderPreview = (maskCanvas: HTMLCanvasElement, preview: HTMLCanvasElement, withBorder = false) => {
+        const ctx = preview.getContext("2d");
+        if (!ctx || !image) return;
+        ctx.clearRect(0, 0, preview.width, preview.height);
+        ctx.fillStyle = maskFillColor;
+        ctx.fillRect(0, 0, preview.width, preview.height);
+        ctx.globalCompositeOperation = "destination-in";
+        ctx.drawImage(maskCanvas, 0, 0);
+        ctx.globalCompositeOperation = "source-over";
+        if (withBorder) drawDashedMaskBorder(ctx, maskCanvas);
+    };
+
+    const readCanvasPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        return {
+            x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * (image?.width || rect.width),
+            y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * (image?.height || rect.height),
+        };
+    };
+
+    const draw = (event: ReactPointerEvent<HTMLCanvasElement>, element: MaskElement) => {
+        const point = readCanvasPoint(event);
+        const ctx = element.canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = brushSize;
+        ctx.globalCompositeOperation = mode === "paint" ? "source-over" : "destination-out";
+        ctx.strokeStyle = "#000";
+        ctx.fillStyle = "#000";
+        if (!drawingRef.current.last) {
+            drawMaskStroke(ctx, point, point, brushSize);
+        } else {
+            drawMaskStroke(ctx, drawingRef.current.last, point, brushSize);
+        }
+        renderPreview(element.canvas, element.preview);
+        drawingRef.current.last = point;
+    };
+
+    const startDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (!activeElement) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drawingRef.current = { active: true, last: null };
+        renderPreview(activeElement.canvas, activeElement.preview);
+        draw(event, activeElement);
+    };
+
+    const moveDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (!drawingRef.current.active || !activeElement) return;
+        event.preventDefault();
+        draw(event, activeElement);
+    };
+
+    const stopDraw = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+        if (!activeElement) return;
+        drawingRef.current = { active: false, last: null };
+        renderPreview(activeElement.canvas, activeElement.preview, canvasHasPaint(activeElement.canvas));
+    };
 
     const runDetect = async () => {
         setDetecting(true);
@@ -55,125 +149,52 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
             const src = await toRealSource(dataUrl);
             const result = await detectElements(src, { config });
             if (result.elements.length) {
-                const next = result.elements.flatMap((item) => normalizeElementRect(item.bbox));
-                setElements(next);
-                setSelectedKeys(new Set(next.map((_, index) => String(index))));
-                setInpaintKeys(new Set(next.map((_, index) => String(index))));
+                // 识别结果的 bbox 转为粗 mask：填充矩形选区，用户可再精修
+                const next: MaskElement[] = result.elements.map((item) => {
+                    const canvas = document.createElement("canvas");
+                    canvas.width = image?.width || 1;
+                    canvas.height = image?.height || 1;
+                    const ctx = canvas.getContext("2d");
+                    if (ctx && image) {
+                        const px = toPixelRect(item.bbox, image.width, image.height);
+                        ctx.fillStyle = "#000";
+                        ctx.fillRect(px.x, px.y, px.width, px.height);
+                    }
+                    const preview = document.createElement("canvas");
+                    preview.width = canvas.width;
+                    preview.height = canvas.height;
+                    const id = `mask-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                    const el: MaskElement = { id, name: item.name, canvas, preview, occludedToInpaint: true };
+                    return el;
+                });
+                setElements((prev) => [...prev, ...next]);
+                setActiveId(next[0]?.id || null);
+                // 渲染预览
+                next.forEach((el) => renderPreview(el.canvas, el.preview, true));
+                message.success(`AI 识别出 ${next.length} 个元素，可用画笔精修选区`);
             } else {
                 if (result.error) message.warning(result.error);
-                else message.info("未识别到元素，可手动框选");
-                setActiveBox(null);
-                setMode("draw");
+                else message.info("未识别到元素，请用画笔涂抹");
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "读取图片失败";
             message.error(errorMessage);
-            setActiveBox(null);
-            setMode("draw");
         } finally {
             setDetecting(false);
         }
     };
 
-    const addManualElement = () => {
-        if (!manualRect) return;
-        const { start, current } = manualRect;
-        if (start.x < 0 || start.y < 0 || current.x < 0 || current.y < 0) return;
-        const x = Math.min(start.x, current.x);
-        const y = Math.min(start.y, current.y);
-        const w = Math.abs(current.x - start.x);
-        const h = Math.abs(current.y - start.y);
-        if (w < 0.03 || h < 0.03) return; // 归一化阈值，忽略过小误触
-        const id = String(elements.length);
-        setElements((prev) => [...prev, { id, name: `元素 ${prev.length + 1}`, bbox: { x, y, width: w, height: h } }]);
-        setSelectedKeys((prev) => new Set([...prev, id]));
-        setInpaintKeys((prev) => new Set([...prev, id]));
-        setManualRect(null);
-        setMode("draw");
-    };
-
-    const toggleSelect = (id: string) => {
-        setSelectedKeys((prev) => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-        });
-    };
-
-    const toggleInpaint = (id: string) => {
-        setInpaintKeys((prev) => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            return next;
-        });
-    };
-
-    const renameElement = (id: string, name: string) => {
-        setElements((prev) => prev.map((item) => (item.id === id ? { ...item, name } : item)));
-    };
-
-    const deleteElement = (id: string) => {
-        setElements((prev) => prev.filter((item) => item.id !== id));
-        setSelectedKeys((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-        });
-        setInpaintKeys((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-        });
-        setActiveBox(null);
-    };
-
-    const startDraw = (event: ReactPointerEvent<HTMLDivElement>) => {
-        if (mode === "delete" || dragging) return;
-        setManualRect({ start: toLocalPoint(event), current: toLocalPoint(event) });
-    };
-    const moveDraw = (event: ReactPointerEvent<HTMLDivElement>) => {
-        if (!manualRect) return;
-        setManualRect((prev) => (prev ? { ...prev, current: toLocalPoint(event) } : prev));
-    };
-    const endDraw = () => {
-        if (manualRect) addManualElement();
-    };
-
-    const startDrag = (idx: number, handle: DragHandle, event: ReactPointerEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setDragging({ idx, handle, start: toLocalPoint(event), rect: elements[idx].bbox });
-    };
-    const moveDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-        if (!dragging) return;
-        const point = toLocalPoint(event);
-        const dx = point.x - dragging.start.x;
-        const dy = point.y - dragging.start.y;
-        setElements((prev) => prev.map((item, index) => (index === dragging.idx ? { ...item, bbox: adjustRect(dragging.rect, dragging.handle, dx, dy) } : item)));
-    };
-    const endDrag = () => setDragging(null);
-
-    const toLocalPoint = (event: ReactPointerEvent<HTMLDivElement> | React.MouseEvent<HTMLDivElement>) => {
-        const box = previewRef.current?.getBoundingClientRect();
-        if (!box || box.width <= 0 || box.height <= 0) return { x: 0, y: 0 };
-        return {
-            x: (event.clientX - box.left) / box.width,
-            y: (event.clientY - box.top) / box.height,
-        };
-    };
-
     const submit = () => {
-        const selected = elements
-            .filter((item) => selectedKeys.has(item.id))
-            .map((item) => ({
-                name: item.name,
-                bbox: item.bbox,
-                occludedToInpaint: inpaintKeys.has(item.id),
-            }));
-        if (!selected.length) return;
-        onConfirm({ elements: selected, keepOriginal });
+        const valid = elements.filter((item) => canvasHasPaint(item.canvas));
+        if (!valid.length) {
+            message.warning("请先用画笔涂抹至少一个元素选区");
+            return;
+        }
+        const payload: CanvasImageExplodePayload = {
+            elements: valid.map((item) => ({ name: item.name, maskCanvas: item.canvas, occludedToInpaint: item.occludedToInpaint })),
+            keepOriginal,
+        };
+        onConfirm(payload);
     };
 
     return (
@@ -182,75 +203,90 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
                 <div className="flex min-h-[440px] items-center justify-center rounded-xl border border-black/10 bg-transparent p-0 dark:border-white/10">
                     <div ref={previewRef} className="relative inline-block max-w-full overflow-hidden rounded-lg bg-transparent select-none">
                         <img src={dataUrl} alt="" className="block max-h-[70vh] max-w-full bg-transparent" draggable={false} />
-                        <div className="absolute inset-0 h-full w-full cursor-crosshair touch-none" onPointerDown={startDraw} onPointerMove={moveDraw} onPointerUp={endDraw} onPointerCancel={endDraw}>
-                            {elements.map((item, index) => (
-                                <BoxElement
-                                    key={item.id}
-                                    rect={item.bbox}
-                                    index={index}
-                                    active={activeBox === index}
-                                    selected={selectedKeys.has(item.id)}
-                                    deleteMode={mode === "delete"}
-                                    onActivate={() => {
-                                        setActiveBox(index);
-                                        setMode("draw");
-                                    }}
-                                    onDelete={() => deleteElement(item.id)}
-                                    onPointerDown={startDrag}
-                                    onPointerMove={moveDrag}
-                                    onPointerUp={endDrag}
-                                />
-                            ))}
-                            {manualRect ? <ManualRectBox rect={manualRect} /> : null}
-                        </div>
+                        {image && activeElement ? (
+                            <canvas
+                                key={activeElement.id}
+                                width={image.width}
+                                height={image.height}
+                                className="absolute inset-0 h-full w-full cursor-crosshair touch-none"
+                                style={{ pointerEvents: "auto" }}
+                                ref={(node) => {
+                                    if (node && activeElement) {
+                                        // 用 active 元素自己的预览 canvas 覆盖显示
+                                        const previewCtx = node.getContext("2d");
+                                        previewCtx?.clearRect(0, 0, node.width, node.height);
+                                        previewCtx?.drawImage(activeElement.preview, 0, 0);
+                                    }
+                                }}
+                                onPointerDown={startDraw}
+                                onPointerMove={moveDraw}
+                                onPointerUp={stopDraw}
+                                onPointerCancel={stopDraw}
+                            />
+                        ) : null}
+                        {image && elements.length === 0 ? (
+                            <div className="pointer-events-none absolute inset-0 grid place-items-center">
+                                <span className="rounded-lg bg-black/50 px-4 py-2 text-sm text-white">点「添加选区」后，用画笔涂抹元素</span>
+                            </div>
+                        ) : null}
                     </div>
                 </div>
 
                 <div className="flex min-h-[440px] flex-col gap-4">
                     <div>
                         <h2 className="text-xl font-semibold">元素爆炸</h2>
-                        <p className="mt-1 text-sm opacity-60">识别图内元素，逐个拆成独立透明 PNG</p>
+                        <p className="mt-1 text-sm opacity-60">用画笔涂抹每个元素，逐块拆成独立透明 PNG</p>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
                         <Button type="primary" icon={<ScanSearch className="size-4" />} onClick={runDetect} loading={detecting}>
                             {detecting ? "识别中…" : "AI 自动识别"}
                         </Button>
-                        <Button
-                            icon={<Plus className="size-4" />}
-                            type={mode === "draw" ? "primary" : "default"}
-                            onClick={() => {
-                                setMode("draw");
-                                setActiveBox(null);
-                            }}
-                        >
-                            框选添加
+                        <Button icon={<Plus className="size-4" />} onClick={addNewElement} disabled={!image}>
+                            添加选区
                         </Button>
-                        <Button icon={<Trash2 className="size-4" />} onClick={() => setMode("delete")} disabled={elements.length === 0}>
-                            删除元素
-                        </Button>
-                        {mode === "draw" ? <span className="self-center text-xs opacity-50">在图上拖动即可框出新元素</span> : null}
                     </div>
+
+                    {activeElement ? (
+                        <div className="grid grid-cols-2 gap-2">
+                            <Button type={mode === "paint" ? "primary" : "default"} icon={<Brush className="size-4" />} onClick={() => setMode("paint")}>
+                                画笔
+                            </Button>
+                            <Button type={mode === "erase" ? "primary" : "default"} icon={<Eraser className="size-4" />} onClick={() => setMode("erase")}>
+                                擦除
+                            </Button>
+                            <div className="col-span-2 space-y-1">
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="opacity-70">笔刷大小</span>
+                                    <span className="font-semibold">{brushSize}px</span>
+                                </div>
+                                <Slider min={10} max={220} step={2} value={brushSize} onChange={setBrushSize} />
+                            </div>
+                        </div>
+                    ) : null}
 
                     <div className="space-y-2">
                         <div className="flex items-center justify-between text-sm">
-                            <span className="font-medium opacity-75">元素清单（{elements.length}）</span>
-                            <span className="opacity-50">勾选=拆出；点亮=补缺口</span>
+                            <span className="font-medium opacity-75">选区清单（{elements.length}）</span>
+                            <span className="opacity-50">点亮=补缺口</span>
                         </div>
-                        <div className="thin-scrollbar max-h-[220px] space-y-2 overflow-y-auto pr-1">
+                        <div className="thin-scrollbar max-h-[200px] space-y-2 overflow-y-auto pr-1">
                             {elements.length === 0 ? (
-                                <div className="rounded-lg border border-dashed px-3 py-6 text-center text-sm opacity-50">用「框选添加」画框，或点「AI 自动识别」</div>
+                                <div className="rounded-lg border border-dashed px-3 py-6 text-center text-sm opacity-50">用「添加选区」+ 画笔涂抹，或点「AI 自动识别」</div>
                             ) : (
-                                elements.map((item, index) => (
-                                    <div key={item.id} className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${activeBox === index ? "bg-black/5 dark:bg-white/5" : ""}`}>
-                                        <Checkbox checked={selectedKeys.has(item.id)} onChange={() => toggleSelect(item.id)} />
-                                        <Input className="h-8 flex-1" size="small" value={item.name} onChange={(e) => renameElement(item.id, e.target.value)} onFocus={() => setActiveBox(index)} />
-                                        <Button size="small" type={inpaintKeys.has(item.id) ? "primary" : "default"} icon={<WandSparkles className="size-3.5" />} onClick={() => toggleInpaint(item.id)}>
-                                            补缺口
-                                        </Button>
-                                        <Button size="small" icon={<Trash2 className="size-3.5" />} onClick={() => deleteElement(item.id)} />
-                                    </div>
-                                ))
+                                elements.map((item) => {
+                                    const has = canvasHasPaint(item.canvas);
+                                    return (
+                                        <div key={item.id} className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${activeId === item.id ? "bg-black/5 dark:bg-white/5" : ""}`}>
+                                            <button type="button" className="size-4 shrink-0 rounded border" style={{ background: has ? "#2f80ff" : "transparent" }} onClick={() => setActiveId(item.id)} aria-label="选中" />
+                                            <Input className="h-8 flex-1" size="small" value={item.name} onChange={(e) => renameElement(item.id, e.target.value)} onFocus={() => setActiveId(item.id)} />
+                                            <Button size="small" type={item.occludedToInpaint ? "primary" : "default"} icon={<WandSparkles className="size-3.5" />} onClick={() => toggleInpaint(item.id)}>
+                                                补缺口
+                                            </Button>
+                                            <Button size="small" icon={<Trash2 className="size-3.5" />} onClick={() => deleteElement(item.id)} />
+                                        </div>
+                                    );
+                                })
                             )}
                         </div>
                     </div>
@@ -261,15 +297,15 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
                                 保留原图节点
                             </Checkbox>
                             <Tag className="ml-auto" color="orange">
-                                方案3 · RMBG为主+AI补缺口
+                                画笔选区 · RMBG + AI 补缺口
                             </Tag>
                         </div>
                         <div className="flex items-center justify-end gap-2">
                             <Button icon={<X className="size-4" />} onClick={onClose}>
                                 取消
                             </Button>
-                            <Button type="primary" icon={<Bomb className="size-4" />} onClick={submit} disabled={!elements.some((item) => selectedKeys.has(item.id))}>
-                                {elements.length > 0 ? `爆炸生成 ${elements.filter((item) => selectedKeys.has(item.id)).length} 个 PNG` : "请先添加元素"}
+                            <Button type="primary" icon={<Bomb className="size-4" />} onClick={submit} disabled={!elements.length}>
+                                {elements.filter((item) => canvasHasPaint(item.canvas)).length > 0 ? `爆炸生成 ${elements.filter((item) => canvasHasPaint(item.canvas)).length} 个 PNG` : "请先涂抹选区"}
                             </Button>
                         </div>
                     </div>
@@ -279,115 +315,62 @@ export function CanvasNodeExplodeDialog({ dataUrl, open, config, onClose, onConf
     );
 }
 
-type CanvasElement = {
-    id: string;
-    name: string;
-    bbox: MattingRect;
-    occluded?: boolean;
-};
-
-function BoxElement({
-    rect,
-    index,
-    active,
-    selected,
-    deleteMode,
-    onActivate,
-    onDelete,
-    onPointerDown,
-    onPointerMove,
-    onPointerUp,
-}: {
-    rect: MattingRect;
-    index: number;
-    active: boolean;
-    selected: boolean;
-    deleteMode: boolean;
-    onActivate: () => void;
-    onDelete: () => void;
-    onPointerDown: (idx: number, handle: DragHandle, event: ReactPointerEvent<HTMLDivElement>) => void;
-    onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
-    onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
-}) {
-    return (
-        <div className={`absolute ${active ? "z-20" : "z-10"}`} style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }}>
-            <div
-                className={`absolute border-2 ${deleteMode ? "cursor-pointer border-red-400/80" : "cursor-move"} ${active ? "border-amber-400" : selected ? "border-[#2f80ff]" : "border-white/80"}`}
-                style={{ inset: 0 }}
-                onPointerDown={(event) => {
-                    event.stopPropagation();
-                    if (deleteMode) {
-                        onDelete();
-                    } else {
-                        onActivate();
-                    }
-                }}
-            >
-                <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] text-white">{index + 1}</span>
-                {!deleteMode
-                    ? handles.map((handle) => (
-                          <div
-                              key={handle}
-                              className="absolute size-3 rounded-full border bg-white"
-                              style={handleStyle(handle)}
-                              onPointerDown={(event) => {
-                                  event.stopPropagation();
-                                  onActivate();
-                                  onPointerDown(index, handle, event);
-                              }}
-                              onPointerMove={onPointerMove}
-                              onPointerUp={onPointerUp}
-                          />
-                      ))
-                    : null}
-            </div>
-        </div>
-    );
-}
-
-function ManualRectBox({ rect }: { rect: { start: { x: number; y: number }; current: { x: number; y: number } } }) {
-    const x = Math.min(rect.start.x, rect.current.x) * 100;
-    const y = Math.min(rect.start.y, rect.current.y) * 100;
-    const w = Math.abs(rect.current.x - rect.start.x) * 100;
-    const h = Math.abs(rect.current.y - rect.start.y) * 100;
-    return <div className="pointer-events-none absolute border-2 border-dashed border-amber-400" style={{ left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%` }} />;
-}
-
-function handleStyle(handle: DragHandle) {
-    const top = handle.includes("n") ? -6 : handle.includes("s") ? "calc(100% - 6px)" : "calc(50% - 6px)";
-    const left = handle.includes("w") ? -6 : handle.includes("e") ? "calc(100% - 6px)" : "calc(50% - 6px)";
-    return { top, left, cursor: `${handle}-resize` as const };
-}
-
-function adjustRect(rect: MattingRect, handle: DragHandle, dx: number, dy: number): MattingRect {
-    let { x, y, width: w, height: h } = rect;
-    if (handle.includes("e")) w += dx;
-    if (handle.includes("s")) h += dy;
-    if (handle.includes("w")) {
-        x += dx;
-        w -= dx;
+function drawMaskStroke(context: CanvasRenderingContext2D, from: { x: number; y: number }, to: { x: number; y: number }, size: number) {
+    if (from.x === to.x && from.y === to.y) {
+        context.beginPath();
+        context.arc(to.x, to.y, size / 2, 0, Math.PI * 2);
+        context.fill();
+        return;
     }
-    if (handle.includes("n")) {
-        y += dy;
-        h -= dy;
-    }
-    if (handle === "move") {
-        x += dx;
-        y += dy;
-    }
-    x = clamp(x, 0, 1);
-    y = clamp(y, 0, 1);
-    w = clamp(w, 0.02, 1 - x);
-    h = clamp(h, 0.02, 1 - y);
-    return { x, y, width: w, height: h };
+    context.beginPath();
+    context.moveTo(from.x, from.y);
+    context.lineTo(to.x, to.y);
+    context.stroke();
 }
 
-function normalizeElementRect(bbox: MattingRect): { id: string; name: string; bbox: MattingRect } {
-    return { id: String(Math.random()), name: "元素", bbox };
+function canvasHasPaint(canvas: HTMLCanvasElement) {
+    const context = canvas.getContext("2d");
+    if (!context) return false;
+    const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    for (let i = 3; i < data.length; i += 4) {
+        if (data[i] > 0) return true;
+    }
+    return false;
 }
 
-function clamp(value: number, min: number, max: number) {
-    return Math.min(max, Math.max(min, value));
+function drawDashedMaskBorder(context: CanvasRenderingContext2D, maskCanvas: HTMLCanvasElement) {
+    const maskContext = maskCanvas.getContext("2d");
+    if (!maskContext) return;
+    const { width, height } = maskCanvas;
+    const data = maskContext.getImageData(0, 0, width, height).data;
+    const step = Math.max(1, Math.round(Math.max(width, height) / 1200));
+    const dash = step * 8;
+    const gap = step * 5;
+    const period = dash + gap;
+    context.save();
+    context.fillStyle = "rgba(255,255,255,.72)";
+    for (let y = step; y < height - step; y += step) {
+        for (let x = step; x < width - step; x += step) {
+            const offset = (y * width + x) * 4 + 3;
+            if (data[offset] === 0 || !isMaskEdge(data, width, x, y, step)) continue;
+            if ((x + y) % period > dash) continue;
+            context.fillRect(x - step / 2, y - step / 2, Math.max(1.5, step), Math.max(1.5, step));
+        }
+    }
+    context.restore();
+}
+
+function isMaskEdge(data: Uint8ClampedArray, width: number, x: number, y: number, step: number) {
+    return data[((y - step) * width + x) * 4 + 3] === 0 || data[((y + step) * width + x) * 4 + 3] === 0 || data[(y * width + x - step) * 4 + 3] === 0 || data[(y * width + x + step) * 4 + 3] === 0;
+}
+
+function toPixelRect(bbox: MattingRect, width: number, height: number): MattingRect {
+    return {
+        x: Math.max(0, Math.min(width, bbox.x)),
+        y: Math.max(0, Math.min(height, bbox.y)),
+        width: Math.max(1, Math.min(width - bbox.x, bbox.width)),
+        height: Math.max(1, Math.min(height - bbox.y, bbox.height)),
+    };
 }
 
 async function toRealSource(dataUrl: string): Promise<string> {

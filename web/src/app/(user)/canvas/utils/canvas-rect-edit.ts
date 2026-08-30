@@ -1,15 +1,15 @@
 "use client";
 
-// 框选修改 —— 主流程编排
-// 把多个框选区域合成为一张「标记图」（每个区域半透明色高亮 + 编号 + 边缘描边），
-// 交给 createCanvasImageTask（image-2 编辑链路）一次性修改所有区域。
-// 返回原尺寸标记图 dataUrl，供页面 handler 发请求。
+// 框选修改 —— 主流程编排（画笔版）
+// 用户用画笔涂抹多个区域，每个区域配文字描述，合成为一张「标记图」
+// （每块涂抹选区按颜色高亮显示 + 编号角标），交给 image-2 编辑链路一次性修改全部区域。
 
 import type { MattingRect } from "@/lib/explode/segment-matting";
 
 export type RectEditItem = {
     id: string;
-    bbox: MattingRect; // 归一化 0~1
+    maskCanvas?: HTMLCanvasElement; // 画笔涂抹选区（原图尺寸）
+    bbox?: MattingRect; // 归一化包围盒（无 mask 时用）
     prompt: string;
 };
 
@@ -35,14 +35,33 @@ export function buildMarkedReference(source: string, items: RectEditItem[], opti
             ctx.drawImage(image, 0, 0, options.width, options.height);
 
             items.forEach((item, index) => {
-                const rect = normalizeRect(item.bbox, options.width, options.height);
                 const color = (options.regionColors || DEFAULT_REGION_COLORS)[index % (options.regionColors || DEFAULT_REGION_COLORS).length];
+                const rect = item.maskCanvas ? maskBoundsRect(item.maskCanvas) : normalizeRect(item.bbox!, options.width, options.height);
 
-                // 区域半透明高亮
-                ctx.fillStyle = color + "33";
-                ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+                // 区域高亮：优先涂抹 mask 形状，否则矩形填充
+                if (item.maskCanvas) {
+                    ctx.save();
+                    ctx.globalCompositeOperation = "source-over";
+                    // 用 mask 作为 alpha 通道填充色块
+                    const tint = document.createElement("canvas");
+                    tint.width = options.width;
+                    tint.height = options.height;
+                    const tintCtx = tint.getContext("2d");
+                    if (tintCtx) {
+                        tintCtx.clearRect(0, 0, tint.width, tint.height);
+                        tintCtx.drawImage(item.maskCanvas, 0, 0, options.width, options.height);
+                        tintCtx.globalCompositeOperation = "source-in";
+                        tintCtx.fillStyle = color;
+                        tintCtx.fillRect(0, 0, tint.width, tint.height);
+                        ctx.drawImage(tint, 0, 0);
+                    }
+                    ctx.restore();
+                } else {
+                    ctx.fillStyle = color + "33";
+                    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+                }
 
-                // 边缘描边
+                // 边缘描边（mask 用包围盒，矩形用本身）
                 ctx.save();
                 ctx.strokeStyle = color;
                 ctx.lineWidth = Math.max(2, Math.round(Math.min(options.width, options.height) / 300));
@@ -109,6 +128,31 @@ function normalizeRect(bbox: MattingRect, width: number, height: number): Mattin
     const w = clamp(bbox.width, 0.02, 1) * width;
     const h = clamp(bbox.height, 0.02, 1) * height;
     return { x, y, width: Math.min(w, width - x), height: Math.min(h, height - y) };
+}
+
+// 从涂抹 mask（原图尺寸像素）计算非空像素包围盒
+function maskBoundsRect(maskCanvas: HTMLCanvasElement): MattingRect {
+    const ctx = maskCanvas.getContext("2d");
+    const { width, height } = maskCanvas;
+    if (!ctx || !width || !height) return { x: 0, y: 0, width, height };
+    const data = ctx.getImageData(0, 0, width, height).data;
+    let minX = width;
+    let minY = height;
+    let maxX = 0;
+    let maxY = 0;
+    for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+            const idx = (y * width + x) * 4 + 3;
+            if (data[idx] > 8) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+    if (maxX < minX || maxY < minY) return { x: 0, y: 0, width, height };
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 function clamp(value: number, min: number, max: number) {

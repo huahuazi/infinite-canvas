@@ -43,6 +43,7 @@ export async function detectElements(source: string | Blob, options: DetectOptio
         const dataUrl = await sourceToDataUrl(source);
         if (!dataUrl) return { elements: [], error: "未能读取图片内容" };
         const config: AiConfig = { ...options.config, model: options.config.textModel || options.config.model };
+        const signal = timeoutSignal(15000);
         const turn = await requestCanvasAgentTurn({
             config,
             systemPrompt: DETECT_SYSTEM_PROMPT,
@@ -57,15 +58,22 @@ export async function detectElements(source: string | Blob, options: DetectOptio
             ],
             tools: [],
             allowTools: false,
+            signal,
         });
         const elements = parseElementsJson(turn.content);
         if (!elements.length) return { elements, error: "模型未返回可识别元素，可尝试手动框选" };
         return { elements };
     } catch (error) {
-        console.warn("[element-detector] AI 定位失败，将引导手动框选", error);
-        const message = error instanceof Error ? error.message : "元素识别失败";
+        const message = error instanceof Error && error.name === "AbortError" ? "识别超时（15 秒），请检查模型渠道或稍后重试" : error instanceof Error ? error.message : "元素识别失败";
         return { elements: [], error: message };
     }
+}
+
+// 返回带超时的 AbortSignal；超时自动 abort
+function timeoutSignal(ms: number): AbortSignal {
+    const controller = new AbortController();
+    window.setTimeout(() => controller.abort(), ms);
+    return controller.signal;
 }
 
 // 解析模型返回的 JSON，容错处理 markdown 代码块包裹、多余文字等
