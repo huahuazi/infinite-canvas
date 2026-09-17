@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/huahuazi/infinite-canvas"><img src="https://img.shields.io/github/stars/huahuazi/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
-  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.7.0-2563eb?style=flat-square" alt="Version"></a>
+  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.7.1-2563eb?style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f97316?style=flat-square" alt="License"></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white" alt="Docker ready"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16.2-000000?style=flat-square&logo=nextdotjs" alt="Next.js"></a>
@@ -25,7 +25,7 @@
 ## 核心功能
 
 - **无限画布**：多画布项目、节点拖拽缩放、连线、小地图、撤销重做、导入导出
-- **AI 创作**：支持 OpenAI 兼容接口的 Images API、Responses API、图生图、参考图编辑、流式接收、Base64 图片返回；Seedance 2.0 可通过火山方舟 Agent Plan 接入；同时支持 Gemini、MiniMax H3、Grok TTS 等渠道
+- **AI 创作**：支持 OpenAI 兼容接口的 Images API、Responses API、图生图、参考图编辑、流式接收、Base64 图片返回；Seedance 系列可通过火山方舟官方 OpenAPI（`/api/v3`）或 Agent Plan（`/api/plan/v3`）接入，支持参考图 / 参考视频 / 参考音频全模态输入；同时支持 Gemini、MiniMax H3、Grok TTS 等渠道
 - **全景图**：支持文字生成、参考图生成和本地 2:1 全景图导入，可作为导演台的场景环境背景
 - **3D 导演台**：在独立 3D 场景中布置角色、模型、全景环境和机位，支持关键帧、时间轴、镜头管理、截图与 MP4 导出，并将机位画面自动发送为连线图片节点
 - **摄像机控制**：图片、视频和生成配置节点支持独立设置相机、镜头、焦距和光圈，将镜头参数自动写入生成提示词，并随节点保存和复制
@@ -123,6 +123,55 @@ claude mcp add infinite-canvas -- infinite-canvas-agent mcp
 也可以直接使用仓库自带的插件包，见 [plugins/](plugins/)：Codex 安装 `plugins/codex-infinite-canvas/`，Claude Code 安装 `plugins/claude-infinite-canvas/`。
 
 详细说明（含 Gemini CLI、Cursor 与插件安装方式）见 [docs/agent-integration.md](docs/agent-integration.md)。
+
+## 火山方舟（Seedance）视频接入
+
+支持火山方舟官方开放接口与 Agent Plan 两条通道，二者共用同一套 Ark 视频任务协议。
+
+| 通道 | Base URL | API Key |
+| --- | --- | --- |
+| 官方 OpenAPI（推荐） | `https://ark.cn-beijing.volces.com/api/v3` | 火山控制台「API Key 管理」创建 |
+| Agent Plan 企业版 | `https://ark.cn-beijing.volces.com/api/plan/v3` | Agent Plan 专属 API Key |
+
+在渠道配置中填写上表地址与 Key，模型名填官方 Model ID（如 `doubao-seedance-2-5-260628`），也可填 `ep-` 开头的推理接入点 ID。Base URL 只填域名时会自动补齐 `/api/v3`。
+
+**参考素材要求**（官方约束）：
+
+- **参考图片 / 参考音频**：可用公网地址，也支持内联 Base64 直接提交（单图 ≤ 30MB、单段音频 ≤ 15MB）；
+- **参考视频**：官方只接受公网地址，**不支持 Base64**。请在 `.env` 配置 `PUBLIC_BASE_URL` 为站点公网根地址，平台会把本地素材**自动转存**到 `/api/media/references/*` 供火山方舟回源拉取（无需手动上传，选中本地文件即可）；
+- 请求体总大小上限 **64MB**，素材较多时优先使用公网地址；
+- 首帧 / 首尾帧模式与参考素材（图 / 视频 / 音频）模式**互斥**，不能混用；
+- `role=reference_image` 仅 Seedance 2.5 / 2.0 系列支持，1.5 pro 与 1.0 系列只能走首帧 / 首尾帧；
+- Seedance 2.5 在首帧 / 首尾帧任务中仅接受 `ratio=adaptive`。
+
+**可选参数**（视频设置面板「火山方舟」分组）：
+
+| 参数 | 说明 |
+| --- | --- |
+| 任务类型 | 自动判定 / 参考生视频 / 视频编辑 / 视频延长。默认自动；参考图与视频、音频混合时会自动声明为「参考生视频」 |
+| 离线推理 | `service_tier=flex`，价格约为在线推理的 50%，适合不赶时间的批量出片；官方明确 Seedance 2.0 / 2.0 fast 不支持 |
+| 输出格式 | MP4（默认）或 MOV |
+| 样片模式 | `draft=true`，先出草图确认构图再出正式片，仅 Seedance 2.5 |
+| 固定摄像头 | `camera_fixed=true`，镜头不运动 |
+| 返回尾帧图像 | `return_last_frame=true`，可用于拼接连续视频 |
+| 随机种子 | `seed`，固定后可复现同一结果 |
+
+以上参数均**按需发送**：只有显式启用才写入请求体，未启用时不传，避免旧模型（1.0 / 1.5 系列）被官方强校验拒绝。
+
+**时长与产物体积**：
+
+- Seedance 2.5 支持最长 **30 秒**连贯直出，其余模型上限 15 秒；
+- 官方产物 URL 仅 **24 小时**有效，Seedance 2.5 另限制 **100 次**下载。平台会在生成完成后自动转存到项目存储，**需启用服务端对象存储才能真正保片**，否则请及时手动下载。
+
+**关于 `PUBLIC_BASE_URL`（参考视频的必要条件）**：
+
+| 部署方式 | `PUBLIC_BASE_URL` | 参考视频可用 |
+| --- | --- | --- |
+| 公网服务器 / 已绑域名 | `https://your-domain.com` | ✅ |
+| 本机或内网跑 | 填了也无效（火山回源不到内网地址） | ❌ 需要内网穿透，或改用公网对象存储的地址 |
+| 未配置 | — | ❌ 会明确提示「未配置 PUBLIC_BASE_URL」 |
+
+注意：**参考图与参考音频不受此限制**，本地文件会内联 Base64 直接提交，本机开发也能正常做图生视频。
 
 ## New API 自动配置
 

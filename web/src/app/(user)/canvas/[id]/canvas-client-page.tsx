@@ -48,6 +48,7 @@ import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
+import { seedanceDurationMax, seedanceDurationOptionsFor } from "@/lib/seedance-video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image-data";
@@ -5839,7 +5840,7 @@ function canvasAgentTaskSummary(node: CanvasNodeData) {
 function canvasAgentVideoDurationHint(modelName: string) {
     const key = modelKey(modelName);
     if (isCogVideoX3Model(key)) return { values: [5, 10], range: "仅 5 或 10 秒" };
-    if (key.includes("seedance")) return { values: [-1, 4, 5, 6, 8, 10, 12, 15], range: "智能或 4-15 秒" };
+    if (key.includes("seedance")) return { values: [...seedanceDurationOptionsFor(key)], range: `智能或 4-${seedanceDurationMax(key)} 秒` };
     if (isCanvasAgentKlingV3(key)) return { values: [3, 15], range: "3-15 秒" };
     if (isCanvasAgentKlingV26(key)) return { values: [5, 10], range: "仅 5 或 10 秒" };
     return { values: [6, 10, 12, 16, 20], range: "1-30 秒" };
@@ -5849,7 +5850,7 @@ function validateCanvasAgentVideoSeconds(modelName: string, seconds: number) {
     if (!Number.isFinite(seconds)) return "视频时长无效，请先向用户确认单镜头时长";
     const key = modelKey(modelName);
     if (isCogVideoX3Model(key) && seconds !== 5 && seconds !== 10) return "当前 CogVideoX-3 模型仅支持 5 或 10 秒";
-    if (key.includes("seedance") && seconds !== -1 && (seconds < 4 || seconds > 15)) return "当前 Seedance 模型仅支持智能时长或 4-15 秒";
+    if (key.includes("seedance") && seconds !== -1 && (seconds < 4 || seconds > seedanceDurationMax(key))) return `当前 Seedance 模型仅支持智能时长或 4-${seedanceDurationMax(key)} 秒`;
     if (isCanvasAgentKlingV3(key) && (seconds < 3 || seconds > 15)) return "当前 Kling 3 模型仅支持 3-15 秒";
     if (isCanvasAgentKlingV26(key) && seconds !== 5 && seconds !== 10) return "当前 Kling 2.6 模型仅支持 5 或 10 秒";
     if (!key.includes("seedance") && !key.includes("kling") && (seconds < 1 || seconds > 30)) return "当前视频模型仅支持 1-30 秒";

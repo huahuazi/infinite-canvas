@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -25,6 +26,14 @@ import (
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/service"
 )
+
+// canvasTaskResponseLimit 画布任务读取上游响应的上限。
+// 云端渠道常在响应体内联 Base64 图片（体积约为原图的 4/3），
+// 旧值 32MB 在多图或高分辨率场景下会被静默截断，导致图片无法返回。
+const canvasTaskResponseLimit = 256 << 20
+
+// imageCandidateDownloadLimit 从远程地址下载单张图片的上限。
+const imageCandidateDownloadLimit = 128 << 20
 
 func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 	user, ok := service.UserFromContext(r.Context())
@@ -255,7 +264,7 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	task.Status = "processing"
 	task.Progress = 10
 	task.StartedAt = current
-	task, _ = service.SaveCanvasImageTask(task)
+	saveCanvasImageTask(task)
 
 	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
 	if err != nil {
@@ -264,23 +273,24 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
-		saveFailedCanvasImageTask(task, message, string(payload))
+		saveFailedCanvasImageTask(task, message, summarizeCanvasTaskResponse(payload))
 		return
 	}
 	if message := readWrappedTaskError(payload); message != "" {
-		saveFailedCanvasImageTask(task, message, string(payload))
+		saveFailedCanvasImageTask(task, message, summarizeCanvasTaskResponse(payload))
 		return
 	}
 	collectAll := isKIESeedreamLayerDecompositionModel(task.Model)
 	imageURLs, mimeType, bytes, err := imageURLsFromAIResponse(payload, responseContentType, collectAll, task.Endpoint == "/chat/completions")
 	if err != nil {
-		saveFailedCanvasImageTask(task, err.Error(), string(payload))
+		saveFailedCanvasImageTask(task, err.Error(), summarizeCanvasTaskResponse(payload))
 		return
 	}
 	task.Status = "completed"
 	task.Progress = 100
 	task.CompletedAt = taskTime()
-	task.ResponseBody = string(payload)
+	// 只存结构摘要：完整响应体内联着几十 MB Base64，入库既无意义又会撑爆字段。
+	task.ResponseBody = summarizeCanvasTaskResponse(payload)
 	task.ImageURL = imageURLs[0]
 	if collectAll {
 		task.ImageURLs = imageURLs
@@ -292,7 +302,16 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	task.Height = 0
 	task.Error = ""
 	task.ErrorDetail = ""
-	_, _ = service.SaveCanvasImageTask(task)
+	saveCanvasImageTask(task)
+}
+
+// saveCanvasImageTask 保存任务并在失败时留下日志。
+// 以前这里的错误被直接丢弃，一旦写库失败（例如字段超长），
+// 任务会永远停在 processing，前端表现为「一直生成中、图片拿不回来」。
+func saveCanvasImageTask(task model.CanvasImageTask) {
+	if _, err := service.SaveCanvasImageTask(task); err != nil {
+		log.Printf("save canvas image task failed: user=%s id=%s status=%s err=%v", task.UserID, task.ID, task.Status, err)
+	}
 }
 
 func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
@@ -300,7 +319,11 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	task.Status = "processing"
 	task.Progress = 10
 	task.StartedAt = current
-	task, _ = service.SaveCanvasAudioTask(task)
+	if saved, err := service.SaveCanvasAudioTask(task); err == nil {
+		task = saved
+	} else {
+		log.Printf("save canvas audio task failed: user=%s id=%s err=%v", task.UserID, task.ID, err)
+	}
 
 	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
 	if err != nil {
@@ -309,11 +332,11 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
-		saveFailedCanvasAudioTask(task, message, string(payload))
+		saveFailedCanvasAudioTask(task, message, summarizeCanvasTaskResponse(payload))
 		return
 	}
 	if message := readWrappedTaskError(payload); message != "" {
-		saveFailedCanvasAudioTask(task, message, string(payload))
+		saveFailedCanvasAudioTask(task, message, summarizeCanvasTaskResponse(payload))
 		return
 	}
 	mimeType := strings.TrimSpace(strings.Split(responseContentType, ";")[0])
@@ -321,7 +344,7 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 		mimeType = strings.TrimSpace(http.DetectContentType(payload))
 	}
 	if strings.Contains(mimeType, "json") {
-		saveFailedCanvasAudioTask(task, "音频接口没有返回音频文件", string(payload))
+		saveFailedCanvasAudioTask(task, "音频接口没有返回音频文件", summarizeCanvasTaskResponse(payload))
 		return
 	}
 	if task.ContentType != "" && strings.HasPrefix(task.ContentType, "audio/") {
@@ -337,7 +360,9 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	task.Bytes = int64(len(payload))
 	task.Error = ""
 	task.ErrorDetail = ""
-	_, _ = service.SaveCanvasAudioTask(task)
+	if _, err := service.SaveCanvasAudioTask(task); err != nil {
+		log.Printf("save canvas audio task failed: user=%s id=%s err=%v", task.UserID, task.ID, err)
+	}
 }
 
 func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
@@ -355,8 +380,45 @@ func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, c
 	proxyAIRequest(recorder, request, endpoint)
 	response := recorder.Result()
 	defer response.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+	payload, err := readLimitedBody(response.Body, canvasTaskResponseLimit)
+	if err != nil {
+		return nil, 0, "", err
+	}
 	return payload, response.StatusCode, response.Header.Get("Content-Type"), nil
+}
+
+// readLimitedBody 读取上游响应，并在超过上限时明确报错。
+// 以前这里直接用 io.LimitReader 截断：io.ReadAll 读到上限不会返回错误，
+// 于是被截断的 JSON 会被当成正常响应，最后表现为「图片接口没有返回图片」这类查不出原因的问题。
+func readLimitedBody(body io.Reader, limit int64) ([]byte, error) {
+	payload, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(payload)) > limit {
+		return nil, fmt.Errorf("上游返回内容超过 %dMB，请降低图片分辨率或改用返回图片地址的渠道", limit>>20)
+	}
+	return payload, nil
+}
+
+// summarizeCanvasTaskResponse 把响应体里的内联 Base64 全部替换成占位符。
+// 该字段前端并不消费，原样入库会撑爆数据库（MySQL TEXT 上限 64KB），
+// 写入失败又会让任务永远停在 processing，前端一直转圈拿不到图。
+func summarizeCanvasTaskResponse(payload []byte) string {
+	var root any
+	if err := json.Unmarshal(payload, &root); err != nil {
+		return fmt.Sprintf("[unparsed response len=%d]", len(payload))
+	}
+	redactLargeImages(&root)
+	summary, err := json.Marshal(root)
+	if err != nil {
+		return fmt.Sprintf("[unparsed response len=%d]", len(payload))
+	}
+	const summaryLimit = 64 * 1024
+	if len(summary) > summaryLimit {
+		return string(summary[:summaryLimit])
+	}
+	return string(summary)
 }
 
 func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detail string) {
@@ -364,7 +426,9 @@ func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detai
 	task.CompletedAt = taskTime()
 	task.Error = firstNonEmpty(message, "图片生成失败")
 	task.ErrorDetail = detail
-	_, _ = service.SaveCanvasImageTask(task)
+	if _, err := service.SaveCanvasImageTask(task); err != nil {
+		log.Printf("save failed canvas image task failed: user=%s id=%s err=%v", task.UserID, task.ID, err)
+	}
 }
 
 func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detail string) {
@@ -372,7 +436,9 @@ func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detai
 	task.CompletedAt = taskTime()
 	task.Error = firstNonEmpty(message, "音频生成失败")
 	task.ErrorDetail = detail
-	_, _ = service.SaveCanvasAudioTask(task)
+	if _, err := service.SaveCanvasAudioTask(task); err != nil {
+		log.Printf("save failed canvas audio task failed: user=%s id=%s err=%v", task.UserID, task.ID, err)
+	}
 }
 
 func readCanvasTaskAIRequest(r *http.Request, fallbackEndpoint string) ([]byte, string, string, string, string, string, string, string, string, error) {
@@ -701,7 +767,7 @@ func imageCandidateBytes(value string) ([]byte, string, error) {
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			return nil, "", errors.New(response.Status)
 		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+		data, err := readLimitedBody(response.Body, imageCandidateDownloadLimit)
 		if err != nil {
 			return nil, "", err
 		}

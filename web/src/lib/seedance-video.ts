@@ -29,6 +29,22 @@ export const seedanceRatioOptions = [
 
 export const seedanceDurationOptions = [-1, 4, 5, 6, 8, 10, 12, 15] as const;
 
+// Seedance 2.5 支持 30 秒连贯直出，其余模型上限 15 秒。
+export const seedance25DurationOptions = [-1, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30] as const;
+
+export function isSeedance25Model(model: string) {
+    const value = String(model || "").toLowerCase();
+    return value.includes("seedance-2-5") || value.includes("seedance-2.5");
+}
+
+export function seedanceDurationOptionsFor(model: string) {
+    return isSeedance25Model(model) ? seedance25DurationOptions : seedanceDurationOptions;
+}
+
+export function seedanceDurationMax(model: string) {
+    return isSeedance25Model(model) ? 30 : 15;
+}
+
 const seedancePixels = {
     "480p": {
         "16:9": "864x496",
@@ -73,7 +89,7 @@ const seedancePixels = {
 } as const;
 
 export function isSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoModel" | "baseUrl">) {
-    return isSeedanceVideoModel(config.model || config.videoModel) || isArkPlanBaseUrl(config.baseUrl);
+    return isSeedanceVideoModel(config.model || config.videoModel) || isArkBaseUrl(config.baseUrl);
 }
 
 export function isSeedanceVideoModel(model: string) {
@@ -90,6 +106,46 @@ export function isArkPlanBaseUrl(baseUrl: string) {
     return baseUrl.toLowerCase().includes("ark.cn-beijing.volces.com/api/plan/v3") || baseUrl.toLowerCase().includes("/api/plan/v3");
 }
 
+// 火山方舟官方开放接口（标准 Ark OpenAPI）Base URL 形如：
+// https://ark.cn-beijing.volces.com/api/v3
+export function isArkOpenApiBaseUrl(baseUrl: string) {
+    return /\/api\/v3(?:\/|$)/i.test(String(baseUrl || "").trim());
+}
+
+// 只要命中火山方舟任一通道（OpenAPI、Agent Plan，或火山官方域名）都按 Ark 协议处理。
+// 其他第三方中转站即便模型名里带 seedance，也保持原有 /videos 行为，避免破坏兼容。
+export function isArkBaseUrl(baseUrl: string) {
+    const value = String(baseUrl || "").trim();
+    if (isArkPlanBaseUrl(value) || isArkOpenApiBaseUrl(value)) return true;
+    return isArkHost(value);
+}
+
+export function isArkHost(baseUrl: string) {
+    return /(^|\.)volces\.com$/i.test(hostnameOf(baseUrl));
+}
+
+// 视频生成任务路径（火山方舟 OpenAPI 与 Agent Plan 共用同一套任务接口）。
+export const ARK_VIDEO_TASK_PATH = "/contents/generations/tasks";
+
+// 归一化火山方舟 Base URL：裁掉用户误贴的完整任务路径，并为火山官方域名补齐 /api/v3。
+export function normalizeArkBaseUrl(baseUrl: string) {
+    let value = String(baseUrl || "").trim().replace(/\/+$/, "");
+    if (!value) return "";
+    const taskIndex = value.toLowerCase().indexOf(ARK_VIDEO_TASK_PATH.toLowerCase());
+    if (taskIndex >= 0) value = value.slice(0, taskIndex).replace(/\/+$/, "");
+    if (isArkPlanBaseUrl(value) || isArkOpenApiBaseUrl(value)) return value;
+    if (isArkHost(value)) return `${value}/api/v3`;
+    return value;
+}
+
+export function hostnameOf(value: string) {
+    try {
+        return new URL(value).hostname;
+    } catch {
+        return "";
+    }
+}
+
 export function normalizeSeedanceResolution(value: string, model = "") {
     const normalized = normalizeResolutionToken(value);
     if (isSeedanceFastOrMiniModel(model) && normalized === "1080p") return "720p";
@@ -103,10 +159,10 @@ export function normalizeResolutionToken(value: string) {
     return `${resolution}p`;
 }
 
-export function normalizeSeedanceDuration(value: string) {
+export function normalizeSeedanceDuration(value: string, model = "") {
     if (String(value).trim() === "-1") return -1;
     const seconds = Math.floor(Number(value) || 5);
-    return Math.max(4, Math.min(15, seconds));
+    return Math.max(4, Math.min(seedanceDurationMax(model), seconds));
 }
 
 export function normalizeSeedanceRatio(value: string) {

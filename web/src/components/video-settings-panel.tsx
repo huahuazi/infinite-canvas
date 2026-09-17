@@ -4,10 +4,10 @@ import { type CSSProperties, type ReactNode } from "react";
 import { Input, Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
-import { boolConfig, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
+import { boolConfig, isSeedance25Model, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationMax, seedanceDurationOptionsFor, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { COGVIDEOX3_DURATIONS, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
-import { channelProtocolForConfig, type AiConfig } from "@/stores/use-config-store";
+import { channelIdForActiveModel, channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 
 export const videoResolutionOptions = [
     { value: "720", label: "720p" },
@@ -37,6 +37,18 @@ const klingV3ModeOptions = [
     { value: "pro", title: "1080P", desc: "" },
     { value: "4k", title: "4K", desc: "" },
 ] as const;
+const arkTaskTypeOptions = [
+    { value: "auto", label: "自动判定" },
+    { value: "reference", label: "参考生视频" },
+    { value: "edit", label: "视频编辑" },
+    { value: "extend", label: "视频延长" },
+] as const;
+
+const arkOutputFormatOptions = [
+    { value: "mp4", label: "MP4" },
+    { value: "mov", label: "MOV" },
+] as const;
+
 const klingV26RatioOptions = seedanceRatioOptions.slice(0, 3);
 const klingV26DurationOptions = [5, 10] as const;
 const klingV3DurationOptions = [3, 15] as const;
@@ -49,7 +61,7 @@ const klingV26RatioLabels: Record<string, string> = {
 type VideoSettingsPanelProps = {
     config: AiConfig;
     modelName?: string;
-    onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoMode" | "videoNegativePrompt" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
+    onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoMode" | "videoNegativePrompt" | "videoGenerateAudio" | "videoWatermark" | "videoArkTaskType" | "videoArkServiceTier" | "videoArkOutputFormat" | "videoArkDraft" | "videoArkCameraFixed" | "videoArkSeed" | "videoArkReturnLastFrame", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
@@ -266,10 +278,20 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
     const model = modelName || config.model || config.videoModel;
     const resolution = normalizeSeedanceResolution(config.vquality, model);
     const ratio = normalizeSeedanceRatio(config.size);
-    const duration = normalizeSeedanceDuration(config.videoSeconds);
+    const duration = normalizeSeedanceDuration(config.videoSeconds, model);
+    const durationOptions = seedanceDurationOptionsFor(model);
+    const durationMax = seedanceDurationMax(model);
     const watermark = boolConfig(config.videoWatermark, false);
     const audioGenerationEnabled = supportsVideoAudioGeneration(model);
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
+    const arkTaskType = ["reference", "edit", "extend"].includes(String(config.videoArkTaskType || "auto").trim().toLowerCase())
+        ? String(config.videoArkTaskType).trim().toLowerCase()
+        : "auto";
+    const arkOutputFormat = String(config.videoArkOutputFormat || "mp4").trim().toLowerCase() === "mov" ? "mov" : "mp4";
+    const arkServiceTier = String(config.videoArkServiceTier || "default").trim().toLowerCase() === "flex" ? "flex" : "default";
+    // 官方：Seedance 2.0 / 2.0 fast 不支持离线推理。
+    const flexSupported = !modelKey(model).includes("seedance-2-0");
+    const isSeedance25 = isSeedance25Model(model);
 
     return (
         <ImageSettingsTheme theme={theme}>
@@ -310,18 +332,56 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
                     <>
                         <SettingGroup title="时长" color={theme.node.muted}>
                             <div className="grid grid-cols-4 gap-2.5">
-                                {seedanceDurationOptions.map((value) => (
+                                {durationOptions.map((value) => (
                                     <OptionPill key={value} selected={duration === value} theme={theme} onClick={() => onConfigChange("videoSeconds", String(value))}>
                                         {value === -1 ? "智能" : `${value}s`}
                                     </OptionPill>
                                 ))}
                             </div>
-                            <NumberInput value={String(duration)} min={-1} max={15} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                            <NumberInput value={String(duration)} min={-1} max={durationMax} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                            {isSeedance25 ? <div className="text-[11px] leading-4 opacity-55">Seedance 2.5 支持最长 30 秒连贯直出。</div> : null}
                         </SettingGroup>
                         {audioGenerationEnabled ? <AudioGenerationSetting checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}
                         <SettingGroup title="输出" color={theme.node.muted}>
                             <div className="grid gap-2 rounded-xl border p-2.5" style={{ borderColor: theme.node.stroke }}>
                                 <SwitchRow label="添加水印" checked={watermark} theme={theme} onChange={(checked) => onConfigChange("videoWatermark", String(checked))} />
+                                <SwitchRow label="固定摄像头" checked={boolConfig(config.videoArkCameraFixed, false)} theme={theme} onChange={(checked) => onConfigChange("videoArkCameraFixed", String(checked))} />
+                                <SwitchRow label="返回尾帧图像" checked={boolConfig(config.videoArkReturnLastFrame, false)} theme={theme} onChange={(checked) => onConfigChange("videoArkReturnLastFrame", String(checked))} />
+                                {isSeedance25 ? <SwitchRow label="样片模式（先出草图确认）" checked={boolConfig(config.videoArkDraft, false)} theme={theme} onChange={(checked) => onConfigChange("videoArkDraft", String(checked))} /> : null}
+                            </div>
+                        </SettingGroup>
+                        <SettingGroup title="火山方舟" color={theme.node.muted}>
+                            <div className="grid gap-2.5 rounded-xl border p-2.5" style={{ borderColor: theme.node.stroke }}>
+                                <div className="text-[11px] leading-4 opacity-55">任务类型（默认自动判定）</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {arkTaskTypeOptions.map((item) => (
+                                        <OptionPill key={item.value} selected={arkTaskType === item.value} theme={theme} onClick={() => onConfigChange("videoArkTaskType", item.value)}>
+                                            {item.label}
+                                        </OptionPill>
+                                    ))}
+                                </div>
+                                <div className="text-[11px] leading-4 opacity-55">输出格式</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {arkOutputFormatOptions.map((item) => (
+                                        <OptionPill key={item.value} selected={arkOutputFormat === item.value} theme={theme} onClick={() => onConfigChange("videoArkOutputFormat", item.value)}>
+                                            {item.label}
+                                        </OptionPill>
+                                    ))}
+                                </div>
+                                {flexSupported ? (
+                                    <>
+                                        <SwitchRow label="离线推理（约 5 折）" checked={arkServiceTier === "flex"} theme={theme} onChange={(checked) => onConfigChange("videoArkServiceTier", checked ? "flex" : "default")} />
+                                        <div className="text-[11px] leading-4 opacity-55">离线推理价格约为在线的 50%，适合不赶时间的批量出片；Seedance 2.0 / 2.0 fast 不支持。</div>
+                                    </>
+                                ) : (
+                                    <div className="text-[11px] leading-4 opacity-55">Seedance 2.0 / 2.0 fast 不支持离线推理。</div>
+                                )}
+                                <div className="flex items-center justify-between gap-3">
+                                    <span className="text-sm" style={{ color: theme.node.text }}>随机种子</span>
+                                    <div className="w-28">
+                                        <NumberInput value={config.videoArkSeed || ""} min={-1} max={4294967295} theme={theme} onChange={(value) => onConfigChange("videoArkSeed", value)} />
+                                    </div>
+                                </div>
                             </div>
                         </SettingGroup>
                     </>

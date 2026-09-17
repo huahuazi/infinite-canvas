@@ -58,6 +58,14 @@ export type AiConfig = {
     videoGenerateAudio: string;
     videoWatermark: string;
     videoCharacterOrientation: string;
+    // 火山方舟（Seedance）专属参数
+    videoArkTaskType: string;
+    videoArkServiceTier: string;
+    videoArkOutputFormat: string;
+    videoArkDraft: string;
+    videoArkCameraFixed: string;
+    videoArkSeed: string;
+    videoArkReturnLastFrame: string;
     systemPrompt: string;
     models: string[];
     imageModels: string[];
@@ -133,6 +141,13 @@ export const defaultConfig: AiConfig = {
     videoGenerateAudio: "false",
     videoWatermark: "false",
     videoCharacterOrientation: "video",
+    videoArkTaskType: "auto",
+    videoArkServiceTier: "default",
+    videoArkOutputFormat: "mp4",
+    videoArkDraft: "false",
+    videoArkCameraFixed: "false",
+    videoArkSeed: "",
+    videoArkReturnLastFrame: "false",
     systemPrompt: "",
     models: [],
     imageModels: [],
@@ -480,7 +495,7 @@ function normalizeVersionedBaseUrl(baseUrl: string) {
         const url = new URL(baseUrl);
         const path = url.pathname.replace(/\/+$/, "");
         const lowerPath = path.toLowerCase();
-        for (const versionPath of ["/api/plan/v3", "/api/paas/v4"]) {
+        for (const versionPath of ["/api/plan/v3", "/api/paas/v4", "/api/v3"]) {
             const versionIndex = lowerPath.indexOf(versionPath);
             if (versionIndex < 0) continue;
             const end = versionIndex + versionPath.length;

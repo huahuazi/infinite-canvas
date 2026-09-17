@@ -4,10 +4,10 @@ import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
-import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceRatio } from "@/lib/seedance-video";
+import { ARK_VIDEO_TASK_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isArkBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
-import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
+import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -44,6 +44,33 @@ function aiApiUrl(config: AiConfig, path: string) {
     return buildApiUrl(channel?.baseUrl || config.baseUrl, path);
 }
 
+// 火山方舟（标准 OpenAPI /api/v3 与 Agent Plan /api/plan/v3）走同一套 Ark 协议：
+// JSON body + content[] 结构 + 任务式轮询。KIE / APIMart / grok2api 等中转通道上的
+// seedance 模型有自己的协议，必须排除，否则会走错格式。
+function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
+    const protocol = channelProtocolForConfig(config);
+    if (protocol === "kie" || protocol === "apimart" || protocol === "grok2api") return false;
+    const channel = localChannelForActiveModel(config);
+    const baseUrl = channel?.baseUrl || config.baseUrl || "";
+    // 渠道地址明确指向火山方舟（官方域名或 /api/v3、/api/plan/v3）时走 Ark 原生协议。
+    if (isArkBaseUrl(baseUrl)) return true;
+    // 云端渠道在前端拿不到渠道地址，此时退回按模型名判断：seedance 一定属于火山方舟。
+    // 有明确地址的第三方中转站不会被这里命中，保持原有 /videos 行为。
+    return !baseUrl && isSeedanceVideoModel(model);
+}
+
+function arkChannelBaseUrl(config: AiConfig) {
+    const channel = localChannelForActiveModel(config);
+    return normalizeArkBaseUrl(channel?.baseUrl || config.baseUrl || "");
+}
+
+function arkVideoApiUrl(config: AiConfig, taskId: string) {
+    if (usesAccountProxy(config)) return taskId ? `/api/v1/videos/${encodeURIComponent(taskId)}` : "/api/v1/videos";
+    const baseUrl = arkChannelBaseUrl(config);
+    if (!baseUrl) throw new VideoRequestError("火山方舟渠道地址不能为空");
+    return `${baseUrl}${ARK_VIDEO_TASK_PATH}${taskId ? `/${encodeURIComponent(taskId)}` : ""}`;
+}
+
 function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
     if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
         const channel = localChannelForActiveModel(config);
@@ -51,6 +78,9 @@ function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
     }
     if (!usesAccountProxy(config) && isMiniMaxH3Config(config, model)) {
         return miniMaxApiUrl(config, `/v2/query/video_generation/${encodeURIComponent(id)}`);
+    }
+    if (isArkSeedanceVideoRequest(config, model)) {
+        return arkVideoApiUrl(config, id);
     }
     if (!usesAccountProxy(config) && isCogVideoX3Model(model)) {
         return aiApiUrl(config, `/async-result/${encodeURIComponent(id)}`);
@@ -120,7 +150,9 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
             ? geminiActionUrl(channel?.baseUrl || config.baseUrl, model, "predictLongRunning")
             : !accountProxy && isMiniMaxH3Config(config, model)
                 ? miniMaxApiUrl(config, "/v2/video_generation")
-                : aiApiUrl(config, !accountProxy && (isGrok2APIVideoConfig(config, model) || isCogVideoX3Model(model)) ? "/videos/generations" : "/videos");
+                : isArkSeedanceVideoRequest(config, model)
+                    ? arkVideoApiUrl(config, "")
+                    : aiApiUrl(config, !accountProxy && (isGrok2APIVideoConfig(config, model) || isCogVideoX3Model(model)) ? "/videos/generations" : "/videos");
         const requestBody = !accountProxy && isGeminiConfig(config, model) ? withoutVideoModel(body) : body;
         const created = directProvider
             ? await (await import("@/services/api/direct-ai")).createDirectVideoTask(config, directProvider, body)
@@ -152,7 +184,7 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
     try {
         if (initialDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
         for (; ;) {
-            const video = await cacheProtectedGeminiVideo(config, model, await pollOnce());
+            const video = await cacheProtectedArkVideo(config, model, await cacheProtectedGeminiVideo(config, model, await pollOnce()));
             onPoll?.(video);
             if (isFailedVideoStatus(video.status)) throw new VideoRequestError(video.error?.message || "视频生成失败", video);
             if (typeof video.progress === "number") onProgress?.(video.progress, video);
@@ -183,7 +215,7 @@ export async function pollVideoGenerationTaskStatus(config: AiConfig, task: Vide
     const result = directProvider
         ? await (await import("@/services/api/direct-ai")).pollDirectVideoTask(config, directProvider, pollId)
         : unwrapVideoResponseForConfig(config, model, (await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
-    return cacheProtectedGeminiVideo(config, model, await cacheProtectedGrokVideo(config, model, result));
+    return cacheProtectedArkVideo(config, model, await cacheProtectedGeminiVideo(config, model, await cacheProtectedGrokVideo(config, model, result)));
 }
 
 export async function listVideoGenerationTasks(config: AiConfig) {
@@ -214,6 +246,22 @@ async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: Vi
     if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
     const media = await uploadMediaFile(await response.blob(), "generated-video");
     return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
+}
+
+// 火山方舟的产物 URL 仅 24 小时有效（Seedance 2.5 还限制最多下载 100 次），
+// 生成完成后立即转存到项目存储，避免链接过期后片子直接丢失。
+async function cacheProtectedArkVideo(config: AiConfig, model: string, task: VideoResponse) {
+    const url = task.video_url || task.url || "";
+    if (!isCompletedVideoStatus(task.status) || task.storageKey || !isArkSeedanceVideoRequest(config, model)) return task;
+    if (!/^https?:\/\//i.test(url)) return task;
+    try {
+        const media = await uploadRemoteMediaToServer(url, `ark-video-${task.id || Date.now()}.mp4`);
+        return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
+    } catch (error) {
+        // 存储未启用或转存失败时保留原始地址，并提示用户链接的有效期限制。
+        console.warn("火山方舟产物转存失败，原始链接仅 24 小时有效，请及时下载：", error);
+        return task;
+    }
 }
 
 async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
@@ -264,6 +312,7 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     if (isGrok2APIVideoConfig(config, model)) return createGrok2APIVideoRequestBody(config, model, prompt, input);
     if (isMiniMaxH3Config(config, model)) return createMiniMaxH3VideoRequestBody(config, model, prompt, input);
     if (isCogVideoX3Model(model)) return createCogVideoX3RequestBody(config, model, prompt, input);
+    if (isArkSeedanceVideoRequest(config, model)) return createArkSeedanceVideoRequestBody(config, model, prompt, input);
     if (isAgnesVideoV25Model(model)) return createAgnesVideoV25RequestBody(config, model, prompt, input);
     if (isAgnesVideoModel(model)) {
         const references = input.references;
@@ -661,6 +710,25 @@ function normalizeVideoResolution(value: string) {
     return /k$/i.test(resolution) ? resolution.toLowerCase() : `${resolution}p`;
 }
 
+// 火山方舟响应：{ id, model, status: queued|running|succeeded|failed, content: { video_url, last_frame_url }, error }
+// 这里把嵌套在 content 里的视频地址提到顶层，前端其余逻辑即可直接复用。
+function normalizeArkVideoResponse(payload: ApiVideoResponse): VideoResponse {
+    const root = payload as unknown as Record<string, unknown>;
+    const content = root.content && typeof root.content === "object" ? (root.content as Record<string, unknown>) : {};
+    const errorMessage = firstString(nestedMessage(root.error));
+    const status = firstString(root.status, root.state, errorMessage ? "failed" : "");
+    const succeeded = isCompletedVideoStatus(status);
+    // 仅在任务成功时才提取视频地址，避免把 content 里的尾帧图误当成视频。
+    const videoUrl = succeeded ? firstString(content.video_url, content.videoUrl, root.video_url, root.url, firstVideoUrl(root)) : "";
+    return normalizeVideoResponse({
+        ...root,
+        task_id: firstString(root.id, root.task_id),
+        status,
+        ...(videoUrl ? { video_url: videoUrl, url: videoUrl } : {}),
+        ...(errorMessage ? { error: { message: errorMessage } } : {}),
+    });
+}
+
 function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {
     if (!payload) throw new Error("接口没有返回视频任务");
     if (isVideoEnvelope(payload)) {
@@ -676,6 +744,7 @@ function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {
 
 function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: ApiVideoResponse) {
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return normalizeGeminiVideoResponse(payload);
+    if (isArkSeedanceVideoRequest(config, model)) return normalizeArkVideoResponse(payload);
     if (isMiniMaxH3Config(config, model)) {
         const root = payload as unknown as Record<string, unknown>;
         const task = root.task && typeof root.task === "object" ? root.task as Record<string, unknown> : null;
@@ -691,6 +760,230 @@ function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: 
         }
     }
     return unwrapVideoResponse(payload);
+}
+
+// 火山方舟官方视频生成请求体（标准 Ark 协议）。
+// POST {base}/contents/generations/tasks
+// body: { model, content: [{type:"text"|"image_url"|...}], ratio, resolution, duration, watermark }
+// 注意：这里必须是 JSON，绝不能走下面的 FormData 兜底分支，Ark 不接受 multipart。
+async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    const hasFrames = Boolean(input.firstFrame || input.lastFrame);
+    const hasReferences = Boolean(input.references.length || input.videoReferences.length || input.audioReferences.length);
+    // 官方约束：图生视频-首帧/首尾帧 与 全模态参考生视频（参考图/视频/音频）是互斥场景，不可混用。
+    if (hasFrames && hasReferences) {
+        throw new VideoRequestError("火山方舟的首尾帧模式与参考素材模式互斥，请只保留首帧/尾帧，或只保留参考图、参考视频、参考音频");
+    }
+    const content: Record<string, unknown>[] = [{ type: "text", text: prompt }];
+
+    if (hasFrames) {
+        if (input.firstFrame) {
+            content.push({ type: "image_url", image_url: { url: await arkReferenceImageUrl(input.firstFrame) }, role: "first_frame" });
+        }
+        if (input.lastFrame) {
+            if (!supportsArkLastFrame(model)) throw new VideoRequestError("当前 Seedance 模型不支持尾帧（1.0 pro fast 仅支持首帧）");
+            content.push({ type: "image_url", image_url: { url: await arkReferenceImageUrl(input.lastFrame) }, role: "last_frame" });
+        }
+    } else {
+        // 参考图（role=reference_image）仅 Seedance 2.5 / 2.0 系列支持。
+        if (input.references.length && !supportsArkReferenceImage(model)) {
+            throw new VideoRequestError("当前 Seedance 模型不支持参考图，请改用 Seedance 2.5 / 2.0 系列，或改为首帧模式");
+        }
+        for (const reference of input.references.slice(0, arkReferenceImageLimit(model))) {
+            content.push({ type: "image_url", image_url: { url: await arkReferenceImageUrl(reference) }, role: "reference_image" });
+        }
+        if ((input.videoReferences.length || input.audioReferences.length) && !supportsArkReferenceMedia(model)) {
+            throw new VideoRequestError("参考视频/参考音频仅 Seedance 2.5 / 2.0 系列支持");
+        }
+        for (const video of input.videoReferences.slice(0, arkReferenceVideoLimit(model))) {
+            content.push({ type: "video_url", video_url: { url: await arkReferenceVideoUrl(video) }, role: "reference_video" });
+        }
+        for (const audio of input.audioReferences.slice(0, arkReferenceAudioLimit(model))) {
+            content.push({ type: "audio_url", audio_url: { url: await arkReferenceAudioUrl(audio) }, role: "reference_audio" });
+        }
+    }
+
+    const body: Record<string, unknown> = {
+        model,
+        content,
+        ratio: arkRatioForRequest(model, config.size, Boolean(input.firstFrame || input.lastFrame)),
+        resolution: normalizeSeedanceResolution(config.vquality, model),
+        duration: normalizeSeedanceDuration(config.videoSeconds, model),
+        watermark: boolConfig(config.videoWatermark, false),
+    };
+    const taskType = arkTaskType(config, input);
+    if (taskType) body.omni_reference_task_type = taskType;
+    // 以下均为可选参数，只在用户显式启用时才写入。
+    // 官方对参数是强校验，未启用就不传，避免旧模型（1.0 / 1.5）收到不支持的字段直接报错。
+    if (arkServiceTier(config, model) === "flex") body.service_tier = "flex";
+    if (arkOutputFormat(config) === "mov") body.output_format = "mov";
+    if (boolConfig(config.videoArkDraft, false)) body.draft = true;
+    if (boolConfig(config.videoArkCameraFixed, false)) body.camera_fixed = true;
+    if (boolConfig(config.videoArkReturnLastFrame, false)) body.return_last_frame = true;
+    const seed = Number(String(config.videoArkSeed || "").trim());
+    if (String(config.videoArkSeed || "").trim() !== "" && Number.isFinite(seed)) body.seed = Math.trunc(seed);
+    if (supportsArkSeedanceAudio(model)) body.generate_audio = boolConfig(config.videoGenerateAudio, false);
+    // Base64 内联素材会显著撑大请求体，官方上限 64MB，超出直接给可操作的提示。
+    if (JSON.stringify(body).length >= ARK_REQUEST_BODY_LIMIT) {
+        throw new VideoRequestError("请求体超过火山方舟 64MB 上限：请减少参考素材数量，或配置 PUBLIC_BASE_URL 改用公网素材地址");
+    }
+    return body;
+}
+
+// Seedance 2.5 在首帧/首尾帧生视频任务中只接受 ratio=adaptive，
+// 指定具体宽高比会被上游拒绝，这里直接对齐官方约束。
+function arkRatioForRequest(model: string, size: string, hasFrame: boolean) {
+    const ratio = normalizeSeedanceRatio(size);
+    if (hasFrame && isArkSeedance25Model(model)) return "adaptive";
+    return ratio;
+}
+
+function isArkSeedance25Model(model: string) {
+    return modelKey(model).includes("seedance-2-5");
+}
+
+// 任务类型：用户显式选择优先；auto 时按素材推断 ——
+// 图片与视频/音频混合属于官方「全模态参考生视频」，显式声明可避免 auto 误判成编辑/延长；
+// 只有单类素材时才交回默认的 auto。
+function arkTaskType(config: AiConfig, input: Required<VideoReferenceInput>) {
+    const selected = String(config.videoArkTaskType || "auto").trim().toLowerCase();
+    if (selected === "reference" || selected === "edit" || selected === "extend") return selected;
+    if (input.references.length > 0 && (input.videoReferences.length > 0 || input.audioReferences.length > 0)) return "reference";
+    return "";
+}
+
+// 离线推理（flex）价格约为在线推理的 50%，但官方明确 Seedance 2.0 / 2.0 fast 不支持。
+function arkServiceTier(config: AiConfig, model: string) {
+    if (String(config.videoArkServiceTier || "default").trim().toLowerCase() !== "flex") return "default";
+    if (modelKey(model).includes("seedance-2-0")) return "default";
+    return "flex";
+}
+
+function arkOutputFormat(config: AiConfig) {
+    return String(config.videoArkOutputFormat || "mp4").trim().toLowerCase() === "mov" ? "mov" : "mp4";
+}
+
+// 火山方舟请求体上限：64MB（官方硬约束），Base64 内联会按 4/3 膨胀，必须留足余量。
+const ARK_REQUEST_BODY_LIMIT = 64 * 1024 * 1024;
+
+async function arkReferenceImageUrl(image: ReferenceImage) {
+    const resolvedUrl = await resolveImageUrl(image.storageKey, "");
+    for (const url of [image.url, resolvedUrl, image.dataUrl]) {
+        const publicUrl = publicHttpUrl(url);
+        if (publicUrl) return publicUrl;
+    }
+    // 本地图片：优先转存成公网地址；失败再内联 Base64（官方允许，单张需 < 30MB）。
+    const dataUrl = await imageToDataUrl(image);
+    const file = await dataUrlToFile({ ...image, dataUrl });
+    const uploaded = await uploadArkReferenceToPublicUrl(file, file.name || "reference.png").catch(() => "");
+    if (uploaded) return uploaded;
+    if (dataUrl.length >= ARK_REQUEST_BODY_LIMIT) {
+        throw new VideoRequestError("图片过大无法内联传给火山方舟：请在后端配置 PUBLIC_BASE_URL 走公网素材，或把图片压到 30MB 以内");
+    }
+    return dataUrl;
+}
+
+// 参考视频官方只接受公网 URL 或 asset:// 素材 ID，不支持 Base64（单文件最大 200MB）。
+async function arkReferenceVideoUrl(video: ReferenceVideo) {
+    const resolvedUrl = await resolveMediaUrl(video.storageKey, video.url);
+    const publicUrl = publicHttpUrl(resolvedUrl) || publicHttpUrl(video.url);
+    if (publicUrl) return publicUrl;
+    const response = await fetch(resolvedUrl || video.url).catch(() => null);
+    if (!response || !response.ok) throw new VideoRequestError("参考视频读取失败，请重新上传后再试");
+    const blob = await response.blob();
+    try {
+        return await uploadArkReferenceToPublicUrl(blob, video.name || `reference-${Date.now()}.mp4`);
+    } catch (error) {
+        const reason = error instanceof Error && error.message ? error.message : "转存失败";
+        throw new VideoRequestError(`火山方舟的参考视频必须使用公网地址（官方不支持视频 Base64 内联）：${reason}`);
+    }
+}
+
+// 参考音频支持 Base64 内联（单段 < 15MB），同样优先走公网地址。
+async function arkReferenceAudioUrl(audio: ReferenceAudio) {
+    const resolvedUrl = await resolveMediaUrl(audio.storageKey, audio.url);
+    const publicUrl = publicHttpUrl(resolvedUrl) || publicHttpUrl(audio.url);
+    if (publicUrl) return publicUrl;
+    const response = await fetch(resolvedUrl || audio.url).catch(() => null);
+    if (!response || !response.ok) throw new VideoRequestError("参考音频读取失败，请重新上传后再试");
+    const blob = await response.blob();
+    const uploaded = await uploadArkReferenceToPublicUrl(blob, audio.name || `reference-${Date.now()}.mp3`).catch(() => "");
+    if (uploaded) return uploaded;
+    if (blob.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes) {
+        throw new VideoRequestError("参考音频超过 15MB 无法内联，请在后端配置 PUBLIC_BASE_URL 改用公网素材");
+    }
+    return blobToArkDataUrl(blob, "audio/mpeg");
+}
+
+function blobToArkDataUrl(blob: Blob, fallbackMimeType: string) {
+    return new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = String(reader.result || "");
+            if (!result.startsWith("data:")) return reject(new Error("参考素材读取失败"));
+            const [header, payload] = [result.slice(0, result.indexOf(",")), result.slice(result.indexOf(",") + 1)];
+            // 官方要求 MIME 小写，格式形如 data:audio/mpeg;base64,xxx。
+            const normalizedHeader = header.includes("/") ? header.toLowerCase() : `data:${fallbackMimeType};base64`;
+            resolve(`${normalizedHeader},${payload}`);
+        };
+        reader.onerror = () => reject(new Error("参考素材读取失败"));
+        reader.readAsDataURL(blob);
+    });
+}
+
+// 火山方舟在生成阶段会主动回源拉取参考素材，本地文件必须先变成公网可访问地址。
+// 后端 /api/v1/media/references 正是为火山方舟准备的公网素材出口。
+async function uploadArkReferenceToPublicUrl(blob: Blob, filename: string) {
+    const token = useUserStore.getState().token;
+    const formData = new FormData();
+    formData.append("file", blob, filename);
+    const response = await fetch("/api/v1/media/references", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+    });
+    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: { url?: string } } | null;
+    if (!response.ok || payload?.code !== 0 || !payload.data?.url) {
+        throw new Error(payload?.msg || `参考素材转存失败：${response.status}`);
+    }
+    const url = publicHttpUrl(payload.data.url);
+    // PUBLIC_BASE_URL 若填的是本机或内网地址，火山方舟同样回源不到，这里提前拦下并说明原因。
+    if (!url) throw new Error("PUBLIC_BASE_URL 不是公网可访问地址，火山方舟无法回源拉取参考素材");
+    return url;
+}
+
+// 参考图 / 参考视频 / 参考音频（全模态参考生视频）仅 Seedance 2.5 与 2.0 系列支持。
+function supportsArkReferenceMedia(model: string) {
+    return modelKey(model).includes("seedance-2");
+}
+
+// 参考图 role=reference_image 同样仅 Seedance 2.5 / 2.0 系列支持；
+// 1.5 pro 与 1.0 系列只能走首帧 / 首尾帧。
+function supportsArkReferenceImage(model: string) {
+    return supportsArkReferenceMedia(model);
+}
+
+// 首尾帧：仅 Seedance 1.0 pro fast 不支持尾帧，其余模型均支持首帧 + 尾帧。
+function supportsArkLastFrame(model: string) {
+    const key = modelKey(model);
+    return !(key.includes("seedance-1-0") && key.includes("fast"));
+}
+
+function arkReferenceImageLimit(model: string) {
+    return modelKey(model).includes("seedance-2-5") ? 30 : SEEDANCE_REFERENCE_LIMITS.images;
+}
+
+function arkReferenceVideoLimit(model: string) {
+    return modelKey(model).includes("seedance-2-5") ? 10 : SEEDANCE_REFERENCE_LIMITS.videos;
+}
+
+function arkReferenceAudioLimit(model: string) {
+    return modelKey(model).includes("seedance-2-5") ? 10 : SEEDANCE_REFERENCE_LIMITS.audios;
+}
+
+// 有声视频：Seedance 2.5 / 2.0 系列与 1.5 pro 支持 generate_audio。
+function supportsArkSeedanceAudio(model: string) {
+    const key = modelKey(model);
+    return key.includes("seedance-2") || key.includes("seedance-1-5");
 }
 
 async function createGeminiVeoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {

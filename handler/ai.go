@@ -639,9 +639,14 @@ func isCogVideoX3Model(modelName string) bool {
 }
 
 func isArkSeedanceVideo(baseURL string, modelName string) bool {
-	base := strings.ToLower(baseURL)
-	model := strings.ToLower(modelName)
-	return strings.Contains(model, "seedance") || strings.Contains(model, "doubao-seedance") || strings.Contains(base, "/api/plan/v3")
+	base := strings.ToLower(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	model := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.Contains(model, "seedance") || strings.Contains(model, "doubao-seedance") {
+		return true
+	}
+	// 火山方舟标准开放接口 /api/v3 与 Agent Plan /api/plan/v3 共用同一套视频任务协议。
+	// 模型名可能是推理接入点 ID（ep- 开头），因此 Base URL 命中即按 Ark 协议处理。
+	return strings.Contains(base, "/api/plan/v3") || strings.Contains(base, "/api/v3")
 }
 
 func isAgnesVideoModel(modelName string) bool {
