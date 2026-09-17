@@ -81,7 +81,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             onPointerDown={(event) => event.stopPropagation()}
             onWheel={(event) => event.stopPropagation()}
         >
-            <CanvasNodeReferenceBar nodeId={node.id} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} />
+            <CanvasNodeReferenceBar nodeId={node.id} connectedNodes={connectedNodes} arkAssets={node.metadata?.arkAssets} onDisconnect={onDisconnectReference} onStartSelection={onStartReferenceSelection} onArkAssetsChange={(assets) => onConfigChange(node.id, { arkAssets: assets })} />
             <CanvasPromptChipInput
                 value={prompt}
                 references={mentionReferences}
@@ -146,7 +146,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             </div>
             <Modal title="编辑提示词" open={expanded} centered width={760} footer={null} onCancel={() => setExpanded(false)} destroyOnHidden>
                 <div data-canvas-no-zoom className="pt-2" onWheelCapture={(event) => event.stopPropagation()}>
-                    <CanvasNodeReferenceBar nodeId={node.id} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={(nodeId) => { setExpanded(false); onStartReferenceSelection?.(nodeId); }} />
+                    <CanvasNodeReferenceBar nodeId={node.id} connectedNodes={connectedNodes} arkAssets={node.metadata?.arkAssets} onDisconnect={onDisconnectReference} onStartSelection={(nodeId) => { setExpanded(false); onStartReferenceSelection?.(nodeId); }} onArkAssetsChange={(assets) => onConfigChange(node.id, { arkAssets: assets })} />
                     <CanvasPromptChipInput
                         value={prompt}
                         references={mentionReferences}

@@ -872,7 +872,22 @@ function arkOutputFormat(config: AiConfig) {
 // 火山方舟请求体上限：64MB（官方硬约束），Base64 内联会按 4/3 膨胀，必须留足余量。
 const ARK_REQUEST_BODY_LIMIT = 64 * 1024 * 1024;
 
+// 火山方舟素材库引用（预置虚拟人像 / 已授权真人素材）。
+// 素材 ID 由火山平台签发，必须与 API Key 属于同一账号；官方要求以 asset:// 原样传入，
+// 不能转成公网地址或 Base64，否则会丢失素材库的身份授权。
+function arkAssetReferenceUrl(value?: string) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    if (/^asset:\/\//i.test(text)) return text;
+    // 用户可能只粘贴了素材 ID（asset-...），自动补齐协议前缀。
+    if (/^asset-[0-9a-z-]+$/i.test(text)) return `asset://${text}`;
+    return "";
+}
+
 async function arkReferenceImageUrl(image: ReferenceImage) {
+    // 素材库引用优先：直接透传，不做公网化或内联。
+    const assetUrl = arkAssetReferenceUrl(image.url) || arkAssetReferenceUrl(image.storageKey);
+    if (assetUrl) return assetUrl;
     const resolvedUrl = await resolveImageUrl(image.storageKey, "");
     for (const url of [image.url, resolvedUrl, image.dataUrl]) {
         const publicUrl = publicHttpUrl(url);
@@ -891,6 +906,9 @@ async function arkReferenceImageUrl(image: ReferenceImage) {
 
 // 参考视频官方只接受公网 URL 或 asset:// 素材 ID，不支持 Base64（单文件最大 200MB）。
 async function arkReferenceVideoUrl(video: ReferenceVideo) {
+    // 素材库引用优先：asset:// 必须原样透传，否则丢失素材授权身份。
+    const assetUrl = arkAssetReferenceUrl(video.url) || arkAssetReferenceUrl(video.storageKey);
+    if (assetUrl) return assetUrl;
     const resolvedUrl = await resolveMediaUrl(video.storageKey, video.url);
     const publicUrl = publicHttpUrl(resolvedUrl) || publicHttpUrl(video.url);
     if (publicUrl) return publicUrl;
@@ -907,6 +925,9 @@ async function arkReferenceVideoUrl(video: ReferenceVideo) {
 
 // 参考音频支持 Base64 内联（单段 < 15MB），同样优先走公网地址。
 async function arkReferenceAudioUrl(audio: ReferenceAudio) {
+    // 素材库引用优先：asset:// 必须原样透传，否则丢失素材授权身份。
+    const assetUrl = arkAssetReferenceUrl(audio.url) || arkAssetReferenceUrl(audio.storageKey);
+    if (assetUrl) return assetUrl;
     const resolvedUrl = await resolveMediaUrl(audio.storageKey, audio.url);
     const publicUrl = publicHttpUrl(resolvedUrl) || publicHttpUrl(audio.url);
     if (publicUrl) return publicUrl;
@@ -1092,7 +1113,8 @@ function readAxiosError(error: unknown, fallback: string) {
 // 上游（尤其火山方舟）的错误原文多为英文，这里补一句可执行的中文说明，
 // 否则用户只看到一行英文报错，不知道该改素材还是改配置。
 const videoErrorHints: Array<{ pattern: RegExp; hint: string }> = [
-    { pattern: /may contain real person|PrivacyInformation/i, hint: "火山方舟不允许上传含真人人脸的参考视频 / 图片。请改用预置虚拟人像、已授权的真人素材，或先把素材做去人脸处理再上传。" },
+    { pattern: /may contain real person|PrivacyInformation/i, hint: "火山方舟不允许上传含真人人脸的参考视频 / 图片。请改用预置虚拟人像、已授权的真人素材（在参考内容栏点钥匙图标填 asset:// 素材 ID），或先把素材做去人脸处理再上传。" },
+    { pattern: /asset.{0,24}(not.{0,10}(found|exist)|invalid|expired|unauthorized|forbidden|permission|access denied)/i, hint: "素材库引用异常：请确认素材与当前渠道的 API Key 属于同一火山账号、素材 ID 填写完整（asset://asset-xxx），且授权仍在有效期内。" },
     { pattern: /SensitiveContent/i, hint: "素材触发了内容安全审核，请更换素材后重试。" },
     { pattern: /quota|insufficient|balance|arrears/i, hint: "账户额度或余额不足，请到火山控制台确认模型已开通并有可用余额。" },
     { pattern: /AuthenticationError|invalid.{0,12}api.?key/i, hint: "API Key 无效或未授权，请在渠道配置里更新火山方舟 API Key。" },

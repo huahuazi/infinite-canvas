@@ -49,6 +49,7 @@ import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { seedanceDurationMax, seedanceDurationOptionsFor } from "@/lib/seedance-video";
+import { arkAssetReferences } from "../utils/canvas-ark-assets";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image-data";
@@ -3474,10 +3475,18 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), videoNode],
                     );
                     if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
+                    // 火山素材库引用（asset://）直接并入参考素材，用于绕开含真人素材的审核限制。
+                    const arkRefs = arkAssetReferences(sourceNode?.metadata?.arkAssets);
                     const created = await createVideoGenerationTask(
                         videoGenerationConfig,
                         requestPrompt,
-                        { references: videoReferenceImages, firstFrame, lastFrame, videoReferences: generationContext.referenceVideos, audioReferences: generationContext.referenceAudios },
+                        {
+                            references: [...videoReferenceImages, ...arkRefs.images],
+                            firstFrame,
+                            lastFrame,
+                            videoReferences: [...(generationContext.referenceVideos || []), ...arkRefs.videos],
+                            audioReferences: [...(generationContext.referenceAudios || []), ...arkRefs.audios],
+                        },
                         undefined,
                         { clientTaskId, source: "canvas", sourceId: videoId },
                     );
@@ -4100,7 +4109,15 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const firstFrame = frameReferencesEnabled ? context?.firstFrame || null : null;
                     const lastFrame = frameReferencesEnabled ? context?.lastFrame || null : null;
                     const references = frameReferencesEnabled ? retryImages : [...retryImages, ...[context?.firstFrame, context?.lastFrame].filter((image): image is ReferenceImage => Boolean(image))];
-                    const created = await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references, firstFrame, lastFrame, videoReferences: context?.referenceVideos || [], audioReferences: context?.referenceAudios || [] }, undefined, {
+                    // 重试同样要带上素材库引用，否则重试会退回含真人审核失败。
+                    const arkRefs = arkAssetReferences(node.metadata?.arkAssets);
+                    const created = await createVideoGenerationTask(videoGenerationConfig, requestPrompt, {
+                        references: [...references, ...arkRefs.images],
+                        firstFrame,
+                        lastFrame,
+                        videoReferences: [...(context?.referenceVideos || []), ...arkRefs.videos],
+                        audioReferences: [...(context?.referenceAudios || []), ...arkRefs.audios],
+                    }, undefined, {
                         clientTaskId: retryVideoTaskId,
                         source: "canvas",
                         sourceId: node.id,

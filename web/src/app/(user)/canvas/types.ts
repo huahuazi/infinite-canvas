@@ -32,6 +32,18 @@ export type CameraControlOptions = {
     aperture: number;
 };
 
+export type CanvasArkAssetKind = "image" | "video" | "audio";
+
+// 火山方舟素材库引用（预置虚拟人像 / 已授权真人素材）。
+// 这类素材由火山平台签发 ID，必须以 asset:// 原样提交，不能转成公网地址或 Base64，
+// 否则会丢失素材库的身份授权，触发「含真人」审核拒绝。用于绕开真人人脸限制。
+export type CanvasArkAsset = {
+    id: string;
+    assetId: string;
+    kind: CanvasArkAssetKind;
+    name?: string;
+};
+
 export type CanvasNodeMetadata = {
     content?: string;
     groupId?: string;
@@ -73,6 +85,7 @@ export type CanvasNodeMetadata = {
     geminiTtsVoice?: string;
     mimoVoiceCloneAudioNodeId?: string;
     references?: string[];
+    arkAssets?: CanvasArkAsset[];
     naturalWidth?: number;
     naturalHeight?: number;
     freeResize?: boolean;
