@@ -8,8 +8,8 @@ import type { ViewportTransform } from "../types";
 
 const MIN_CANVAS_SCALE = 0.05;
 const MAX_CANVAS_SCALE = 5;
-// 指数映射：让触控板捏合的位移和画布缩放比例一一对应，避免小位移跳变。
-const ZOOM_WHEEL_SENSITIVITY = 0.0022;
+// 指数映射：让触控板捏合的位移和画布缩放比例一一对应，数值越大越灵敏。
+const ZOOM_WHEEL_SENSITIVITY = 0.005;
 
 function normalizeWheelDelta(event: { deltaX: number; deltaY: number; deltaMode: number }, pageSize: number, horizontal = false) {
     const raw = horizontal ? event.deltaX : event.deltaY;

@@ -2273,6 +2273,26 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content)}`);
     }, []);
 
+    const copyNodeImage = useCallback(
+        async (node: CanvasNodeData) => {
+            const src = node.metadata?.content;
+            if (!src) return;
+            if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+                message.error("当前环境不支持复制图片");
+                return;
+            }
+            try {
+                const blob = await (await fetch(src)).blob();
+                await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+                message.success("已复制图片");
+            } catch (error) {
+                console.error("Copy image failed:", error);
+                message.error("复制图片失败");
+            }
+        },
+        [message],
+    );
+
     const disconnectNodeReference = useCallback((fromNodeId: string, toNodeId: string) => {
         setConnections((prev) => prev.filter((connection) => connection.fromNodeId !== fromNodeId || connection.toNodeId !== toNodeId));
     }, []);
@@ -4417,7 +4437,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, []);
 
     const focusNode = useCallback(
-        (nodeId: string) => {
+        (nodeId: string, fillRatio = 0.6, maxScale = 1) => {
             const node = nodesRef.current.find((item) => item.id === nodeId);
             if (!node) return;
             const rootId = node.metadata?.batchRootId;
@@ -4426,7 +4446,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             }
             const worldX = node.position.x + node.width / 2;
             const worldY = node.position.y + node.height / 2;
-            const k = Math.min(Math.max(Math.min((size.width * 0.6) / node.width, (size.height * 0.6) / node.height), 0.05), 1);
+            const k = Math.min(Math.max(Math.min((size.width * fillRatio) / node.width, (size.height * fillRatio) / node.height), 0.05), maxScale);
             const target = { x: size.width / 2 - worldX * k, y: size.height / 2 - worldY * k, k };
             setSelectedNodeIds(new Set([node.id]));
             setSelectedConnectionId(null);
@@ -4447,6 +4467,16 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             focusAnimationRef.current = requestAnimationFrame(step);
         },
         [size.height, size.width, toggleBatchExpanded],
+    );
+
+    // 双击节点：把节点放大到接近铺满视口（区别于「放大预览」只看图片本身）。
+    const enlargeNode = useCallback((node: CanvasNodeData) => focusNode(node.id, 0.92, 2), [focusNode]);
+
+    useEffect(
+        () => () => {
+            if (focusAnimationRef.current) cancelAnimationFrame(focusAnimationRef.current);
+        },
+        [],
     );
 
     // 这些回调用 useCallback 固定引用，避免每次缩放/渲染都重建，从而让 CanvasNode 的 React.memo 真正生效。
@@ -4676,6 +4706,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             onRetry={retryVideoNode}
                             onGenerateImage={generateImageFromTextNode}
                             onViewImage={viewImageNode}
+                            onEnlargeNode={enlargeNode}
                             onSelectReference={selectNodeReference}
                             onContextMenu={nodeContextMenuHandler}
                         />
@@ -4859,24 +4890,38 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 ) : contextMenu ? (
                     <CanvasNodeContextMenu
                         menu={contextMenu}
-                        canCaptureVideoFrame={contextMenuNode?.type === CanvasNodeType.Video && Boolean(contextMenuNode.metadata?.content)}
+                        node={contextMenu.type === "node" ? contextMenuNode : null}
                         onClose={() => setContextMenu(null)}
-                        onCaptureVideoFrame={(position) => {
-                            if (contextMenu.type !== "node") return;
-                            void captureVideoNodeFrame(contextMenu.nodeId, position);
+                        onDeleteConnection={() => {
+                            if (contextMenu.type === "connection") deleteConnection(contextMenu.connectionId);
                         }}
-                        onDuplicate={() => {
-                            if (contextMenu.type !== "node") return;
-                            duplicateNode(contextMenu.nodeId);
-                            setContextMenu(null);
-                        }}
-                        onDelete={() => {
-                            if (contextMenu.type === "node") {
-                                deleteNodes(new Set([contextMenu.nodeId]));
-                            } else {
-                                deleteConnection(contextMenu.connectionId);
-                            }
-                            setContextMenu(null);
+                        actions={{
+                            preview: viewImageNode,
+                            saveAsset: (node) => void saveNodeAsset(node),
+                            download: downloadNodeImage,
+                            upload: (node) => handleUploadRequest(node.id),
+                            copyImage: (node) => void copyNodeImage(node),
+                            copyNodes: copySelectedNodes,
+                            duplicate: (node) => duplicateNode(node.id),
+                            paste: () => {
+                                if (!pasteCopiedNodes()) void pasteSystemClipboard();
+                            },
+                            remove: (node) => deleteNodes(new Set([node.id])),
+                            editText: openTextEditor,
+                            generateImage: (node) => void generateImageFromTextNode(node),
+                            reversePrompt: createImageReversePromptNodes,
+                            captureFrame: (node, position) => void captureVideoNodeFrame(node.id, position),
+                            crop: (node) => setCropNodeId(node.id),
+                            split: (node) => setSplitNodeId(node.id),
+                            explode: (node) => setExplodeNodeId(node.id),
+                            rectEdit: (node) => setRectEditNodeId(node.id),
+                            upscale: (node) => setUpscaleNodeId(node.id),
+                            superResolve: (node) => setSuperResolveNodeId(node.id),
+                            angle: (node) => setAngleNodeId(node.id),
+                            uploadCloud: (node) => {
+                                if (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) void uploadNodeMediaToCloud(node);
+                                else void uploadNodeImageToCloud(node);
+                            },
                         }}
                     />
                 ) : null}

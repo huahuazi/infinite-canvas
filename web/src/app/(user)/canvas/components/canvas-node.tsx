@@ -53,6 +53,7 @@ type CanvasNodeProps = {
     onRetry?: (node: CanvasNodeData) => void;
     onGenerateImage?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
+    onEnlargeNode?: (node: CanvasNodeData) => void;
     onSelectReference?: (nodeId: string) => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
 };
@@ -117,6 +118,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     onRetry,
     onGenerateImage,
     onViewImage,
+    onEnlargeNode,
     onSelectReference,
     onContextMenu,
 }: CanvasNodeProps) {
@@ -381,7 +383,8 @@ export const CanvasNode = React.memo(function CanvasNode({
                         event.preventDefault();
                         event.stopPropagation();
                         if (data.type === CanvasNodeType.Video && event.target instanceof HTMLVideoElement) event.target.pause();
-                        onViewImage?.(data);
+                        if (onEnlargeNode) onEnlargeNode(data);
+                        else onViewImage?.(data);
                         return;
                     }
                     if (data.type !== CanvasNodeType.Text) return;
