@@ -745,6 +745,11 @@ function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {
 }
 
 function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: ApiVideoResponse) {
+    // 后端代理统一用 { code, msg, data } 信封返回，code !== 0 时 msg 才是上游真实原因。
+    // 各渠道分支必须在解析前先检查，否则真实错误会被吞掉，界面只剩「视频接口没有返回任务 ID」。
+    if (isVideoEnvelope(payload) && payload.code !== 0) {
+        throw new VideoRequestError(payload.msg || payload.message || "视频生成失败", payload);
+    }
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return normalizeGeminiVideoResponse(payload);
     if (isArkSeedanceVideoRequest(config, model)) return normalizeArkVideoResponse(payload);
     if (isMiniMaxH3Config(config, model)) {
@@ -1075,12 +1080,35 @@ function isVideoEnvelope(payload: ApiVideoResponse): payload is ApiVideoEnvelope
 }
 
 function readAxiosError(error: unknown, fallback: string) {
-    if (error instanceof VideoRequestError) return { message: error.message, detail: error.detail || error.stack || error.message };
+    if (error instanceof VideoRequestError) return { message: humanizeVideoError(error.message), detail: error.detail || error.stack || error.message };
     if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
         const responseData = error.response?.data;
-        return { message: responseData?.msg || responseData?.error?.message || (error.response?.status ? `${fallback}：${error.response.status}` : fallback), detail: responseData || error.message };
+        const message = responseData?.msg || responseData?.error?.message || (error.response?.status ? `${fallback}：${error.response.status}` : fallback);
+        return { message: humanizeVideoError(message), detail: responseData || error.message };
     }
-    return { message: error instanceof Error ? error.message : fallback, detail: error instanceof Error ? error.stack || error.message : error };
+    return { message: humanizeVideoError(error instanceof Error ? error.message : fallback), detail: error instanceof Error ? error.stack || error.message : error };
+}
+
+// 上游（尤其火山方舟）的错误原文多为英文，这里补一句可执行的中文说明，
+// 否则用户只看到一行英文报错，不知道该改素材还是改配置。
+const videoErrorHints: Array<{ pattern: RegExp; hint: string }> = [
+    { pattern: /may contain real person|PrivacyInformation/i, hint: "火山方舟不允许上传含真人人脸的参考视频 / 图片。请改用预置虚拟人像、已授权的真人素材，或先把素材做去人脸处理再上传。" },
+    { pattern: /SensitiveContent/i, hint: "素材触发了内容安全审核，请更换素材后重试。" },
+    { pattern: /quota|insufficient|balance|arrears/i, hint: "账户额度或余额不足，请到火山控制台确认模型已开通并有可用余额。" },
+    { pattern: /AuthenticationError|invalid.{0,12}api.?key/i, hint: "API Key 无效或未授权，请在渠道配置里更新火山方舟 API Key。" },
+    { pattern: /ModelNotOpen|not activated|InvalidModel|model.{0,14}not.{0,14}(found|exist)/i, hint: "模型不可用：请确认该模型已在火山控制台开通，且模型 ID 填写正确。" },
+    { pattern: /content.{0,24}(type|format).{0,24}(not|invalid)|Unsupported/i, hint: "素材格式不被支持，请检查格式与体积是否符合火山方舟要求。" },
+    { pattern: /resolution|ratio|duration.{0,20}(invalid|exceed)/i, hint: "参数超出该模型允许范围，请调整时长 / 分辨率 / 比例。" },
+];
+
+function humanizeVideoError(message: string) {
+    const text = String(message || "").trim();
+    if (!text) return text;
+    const hit = videoErrorHints.find((item) => item.pattern.test(text));
+    if (!hit) return text;
+    // 已经带过这条中文说明时不再重复追加。
+    if (text.includes(hit.hint.slice(0, 12))) return text;
+    return `${text}\n\n（${hit.hint}）`;
 }
 
 async function writeVideoAICallLog(config: AiConfig, model: string, endpoint: string, method: "GET" | "POST", startedAt: number, status: number, requestBody: string, responseBody: string, error: string) {
