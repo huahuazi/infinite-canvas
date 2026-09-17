@@ -1113,7 +1113,7 @@ function readAxiosError(error: unknown, fallback: string) {
 // 上游（尤其火山方舟）的错误原文多为英文，这里补一句可执行的中文说明，
 // 否则用户只看到一行英文报错，不知道该改素材还是改配置。
 const videoErrorHints: Array<{ pattern: RegExp; hint: string }> = [
-    { pattern: /may contain real person|PrivacyInformation/i, hint: "火山方舟不允许上传含真人人脸的参考视频 / 图片。请改用预置虚拟人像、已授权的真人素材（在参考内容栏点钥匙图标填 asset:// 素材 ID），或先把素材做去人脸处理再上传。" },
+    { pattern: /real person|PrivacyInformation/i, hint: "火山方舟不允许含真人人脸的参考素材。" },
     { pattern: /asset.{0,24}(not.{0,10}(found|exist)|invalid|expired|unauthorized|forbidden|permission|access denied)/i, hint: "素材库引用异常：请确认素材与当前渠道的 API Key 属于同一火山账号、素材 ID 填写完整（asset://asset-xxx），且授权仍在有效期内。" },
     { pattern: /SensitiveContent/i, hint: "素材触发了内容安全审核，请更换素材后重试。" },
     { pattern: /quota|insufficient|balance|arrears/i, hint: "账户额度或余额不足，请到火山控制台确认模型已开通并有可用余额。" },
@@ -1126,9 +1126,17 @@ const videoErrorHints: Array<{ pattern: RegExp; hint: string }> = [
 function humanizeVideoError(message: string) {
     const text = String(message || "").trim();
     if (!text) return text;
+    // 已经带过中文说明时不再重复追加。
+    if (text.includes("火山方舟不允许")) return text;
+
+    // 真人检测错误必须区分图片还是视频：火山只报 content[N]，不翻译的话用户不知道该动哪个素材。
+    if (/real person|PrivacyInformation/i.test(text)) {
+        const target = /input video/i.test(text) ? "参考视频" : /input image/i.test(text) ? "参考图片" : "参考素材";
+        return `${text}\n\n（火山方舟不允许${target}含真人人脸。若已用素材库（asset://）授权了同一素材，请在「参考内容」栏把原始的${target}断开 —— 原始素材和素材库素材同时提交仍会被整单拒绝；也可改用预置虚拟人像，或先对素材做去人脸处理。）`;
+    }
+
     const hit = videoErrorHints.find((item) => item.pattern.test(text));
     if (!hit) return text;
-    // 已经带过这条中文说明时不再重复追加。
     if (text.includes(hit.hint.slice(0, 12))) return text;
     return `${text}\n\n（${hit.hint}）`;
 }
