@@ -481,7 +481,7 @@ func parseVideoTaskPayload(payload []byte, modelName string) parsedVideoTaskPayl
 		Progress:        readIntPath(data, "progress"),
 		Seconds:         firstNonEmpty(readStringPath(data, "seconds"), readStringPath(data, "duration")),
 		Size:            firstNonEmpty(readStringPath(data, "size"), readSizeFromDimensions(data)),
-		VideoURL:        firstNonEmpty(readStringPath(data, "video_url"), readStringPath(data, "url"), readStringPath(data, "remixed_from_video_id"), readStringPath(data, "output_url"), readStringPath(data, "download_url"), findFirstHTTPURL(data)),
+		VideoURL:        firstNonEmpty(readStringPath(data, "video_url"), readStringPath(data, "url"), readStringPath(data, "content.video_url"), readStringPath(data, "remixed_from_video_id"), readStringPath(data, "output_url"), readStringPath(data, "download_url"), findFirstHTTPURL(data)),
 		Error:           firstNonEmpty(readStringPath(data, "error.message"), readStringPath(data, "error")),
 		ErrorDetail:     "",
 	}
@@ -625,7 +625,9 @@ func findFirstHTTPURL(value any) string {
 			}
 		}
 	case map[string]any:
-		for _, key := range []string{"uri", "url", "video_url", "videoUrl", "download_url", "downloadUrl", "output_url", "outputUrl", "resultUrls", "result_urls", "videoUrls", "video_urls", "urls", "videos", "video_result", "video", "generatedSamples", "generateVideoResponse", "response", "data", "result", "metadata"} {
+		// content 要排在前面：火山方舟的产物地址在 content.video_url 里，
+		// 漏掉它会让 completed 任务的 video_url 一直是空。
+		for _, key := range []string{"uri", "url", "video_url", "videoUrl", "content", "download_url", "downloadUrl", "output_url", "outputUrl", "resultUrls", "result_urls", "videoUrls", "video_urls", "urls", "videos", "video_result", "video", "generatedSamples", "generateVideoResponse", "response", "data", "result", "metadata"} {
 			if url := findFirstHTTPURL(typed[key]); url != "" {
 				return url
 			}
