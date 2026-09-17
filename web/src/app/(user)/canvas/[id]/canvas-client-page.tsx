@@ -73,7 +73,7 @@ import { CanvasDirector } from "../components/canvas-director";
 import { CanvasDirectorNodePanel } from "../components/canvas-director-node-panel";
 import { CanvasAssistantPanel } from "../components/canvas-assistant-panel";
 import { LocalAgentBridge } from "../components/local-agent-bridge";
-import { CanvasNodeContextMenu } from "../components/canvas-context-menu";
+import { CanvasBackgroundContextMenu, CanvasNodeContextMenu } from "../components/canvas-context-menu";
 import { CanvasNodeAngleDialog, type CanvasImageAngleParams } from "../components/canvas-node-angle-dialog";
 import { CanvasNodeCropDialog, type CanvasImageCropRect } from "../components/canvas-node-crop-dialog";
 import { CanvasNodeMaskEditDialog, type CanvasImageMaskEditPayload } from "../components/canvas-node-mask-edit-dialog";
@@ -155,6 +155,12 @@ const VIDEO_NODE_MAX_WIDTH = 420;
 const VIDEO_NODE_MAX_HEIGHT = 420;
 const CONNECTION_HANDLE_HIT_RADIUS = 40;
 const CONNECTION_NODE_HIT_PADDING = 32;
+// 稳定的空数组：避免每次渲染都新建引用导致 CanvasNode 的 React.memo 失效。
+const EMPTY_INPUTS: NodeGenerationInput[] = [];
+const EMPTY_MENTION_REFERENCES: ReturnType<typeof buildNodeMentionReferences> = [];
+const EMPTY_CONNECTED_NODES: CanvasNodeData[] = [];
+const EMPTY_VIDEO_FRAME_OPTIONS: CanvasVideoFrameOption[] = [];
+const EMPTY_VIDEO_RESOURCE_OPTIONS: CanvasVideoResourceOption[] = [];
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
@@ -504,6 +510,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const connectionsRef = useRef(connections);
     const selectedNodeIdsRef = useRef(selectedNodeIds);
     const viewportRef = useRef(viewport);
+    const viewportScaleRef = useRef(viewport.k);
     const connectingParamsRef = useRef(connectingParams);
     const connectionTargetNodeIdRef = useRef(connectionTargetNodeId);
     const selectionBoxRef = useRef(selectionBox);
@@ -747,6 +754,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         connectionsRef.current = connections;
         selectedNodeIdsRef.current = selectedNodeIds;
         viewportRef.current = viewport;
+        viewportScaleRef.current = viewport.k;
         connectingParamsRef.current = connectingParams;
         connectionTargetNodeIdRef.current = connectionTargetNodeId;
         pendingConnectionCreateRef.current = pendingConnectionCreate;
@@ -1836,12 +1844,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     const createTextNodeFromClipboard = useCallback(
-        (text: string) => {
+        (text: string, position?: Position) => {
             const trimmed = text.trim();
             if (!trimmed) return false;
 
             const node = {
-                ...createCanvasNode(CanvasNodeType.Text, getCanvasCenter(), { content: trimmed, status: NODE_STATUS_SUCCESS }),
+                ...createCanvasNode(CanvasNodeType.Text, position || getCanvasCenter(), { content: trimmed, status: NODE_STATUS_SUCCESS }),
                 title: trimmed.slice(0, 32) || "剪切板文本",
             };
 
@@ -1855,24 +1863,111 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [getCanvasCenter],
     );
 
-    const pasteSystemClipboard = useCallback(async () => {
-        if (!navigator.clipboard) return;
+    // 上传 / 拖拽 / 右键 / 粘贴共用的类型识别：按模态建立对应节点，多文件自动错位排布。
+    const ingestFiles = useCallback(
+        async (files: File[], position: Position) => {
+            const list = files.filter((file) => file.size > 0);
+            for (const [index, file] of list.entries()) {
+                const target = { x: position.x + index * 28, y: position.y + index * 28 };
+                const kind = canvasFileKind(file);
+                if (kind === "audio") void createAudioFileNode(file, target);
+                else if (kind === "video") void createVideoFileNode(file, target);
+                else if (kind === "image") void createImageFileNode(file, target, true);
+                else if (kind === "text") {
+                    try {
+                        createTextNodeFromClipboard(await file.text(), target);
+                    } catch {
+                        message.error("读取文本文件失败");
+                    }
+                }
+            }
+        },
+        [createAudioFileNode, createImageFileNode, createTextNodeFromClipboard, createVideoFileNode, message],
+    );
 
-        const items = await navigator.clipboard.read();
-        const imageItem = items.find((item) => item.types.some((type) => type.startsWith("image/")));
-        if (imageItem) {
-            const imageType = imageItem.types.find((type) => type.startsWith("image/"));
-            if (!imageType) return;
-            const blob = await imageItem.getType(imageType);
-            const file = new File([blob], "clipboard-image.png", { type: imageType });
-            void createImageFileNode(file, getCanvasCenter());
-            message.success("已从剪切板添加图片");
+    const pasteSystemClipboard = useCallback(async () => {
+        if (!navigator.clipboard?.read) {
+            const text = await navigator.clipboard?.readText?.().catch(() => "");
+            if (text && createTextNodeFromClipboard(text)) message.success("已从剪切板添加文本");
             return;
         }
 
-        const text = await navigator.clipboard.readText();
-        if (createTextNodeFromClipboard(text)) message.success("已从剪切板添加文本");
-    }, [createImageFileNode, createTextNodeFromClipboard, getCanvasCenter, message]);
+        try {
+            const items = await navigator.clipboard.read();
+            const files: File[] = [];
+            for (const item of items) {
+                const mediaType = item.types.find((type) => type.startsWith("image/") || type.startsWith("video/") || type.startsWith("audio/"));
+                if (!mediaType) continue;
+                const blob = await item.getType(mediaType);
+                files.push(new File([blob], `clipboard-${Date.now()}-${files.length}.${mediaType.split("/")[1] || "bin"}`, { type: mediaType }));
+            }
+            if (files.length) {
+                await ingestFiles(files, getCanvasCenter());
+                message.success(files.length > 1 ? `已从剪切板添加 ${files.length} 个文件` : "已从剪切板添加内容");
+                return;
+            }
+            const text = await navigator.clipboard.readText();
+            if (createTextNodeFromClipboard(text)) message.success("已从剪切板添加文本");
+        } catch (error) {
+            console.error("Paste clipboard failed:", error);
+            const text = await navigator.clipboard.readText().catch(() => "");
+            if (text && createTextNodeFromClipboard(text)) message.success("已从剪切板添加文本");
+        }
+    }, [createTextNodeFromClipboard, getCanvasCenter, ingestFiles, message]);
+
+    // 从网页复制的图片有时只有 text/html，这里抽出 <img src> 兜底。
+    const pasteRemoteImage = useCallback(
+        async (src: string) => {
+            try {
+                if (src.startsWith("data:")) {
+                    const blob = await (await fetch(src)).blob();
+                    const extension = (blob.type.split("/")[1] || "png").replace("jpeg", "jpg");
+                    void createImageFileNode(new File([blob], `clipboard-${Date.now()}.${extension}`, { type: blob.type || "image/png" }), getCanvasCenter());
+                    return;
+                }
+                const image = await uploadRemoteImageToServer(src, `clipboard-${Date.now()}.png`);
+                appendImportedImageNode(image, "剪切板图片", getCanvasCenter(), CanvasNodeType.Image);
+            } catch (error) {
+                console.error("Paste remote image failed:", error);
+                message.error("粘贴图片失败");
+            }
+        },
+        [appendImportedImageNode, createImageFileNode, getCanvasCenter, message],
+    );
+
+    // 原生 paste 事件能同时拿到文件、HTML 和纯文本，作为画布粘贴的主入口。
+    useEffect(() => {
+        const handlePaste = (event: ClipboardEvent) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || target?.closest("[contenteditable='true']") || target?.closest("[data-canvas-no-zoom]")) return;
+            const data = event.clipboardData;
+            if (!data) return;
+
+            const files = Array.from(data.files || []);
+            if (files.length) {
+                event.preventDefault();
+                void ingestFiles(files, getCanvasCenter());
+                message.success(files.length > 1 ? `已粘贴 ${files.length} 个文件` : "已粘贴文件");
+                return;
+            }
+
+            const html = data.getData("text/html");
+            const text = data.getData("text/plain");
+            const imageSrc = extractClipboardImageSrc(html);
+            if (imageSrc && (!text.trim() || imageSrc === text.trim() || text.includes("<img"))) {
+                event.preventDefault();
+                void pasteRemoteImage(imageSrc);
+                return;
+            }
+            if (text.trim()) {
+                event.preventDefault();
+                if (createTextNodeFromClipboard(text)) message.success("已从剪切板添加文本");
+            }
+        };
+
+        window.addEventListener("paste", handlePaste);
+        return () => window.removeEventListener("paste", handlePaste);
+    }, [createTextNodeFromClipboard, getCanvasCenter, ingestFiles, message, pasteRemoteImage]);
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -1929,8 +2024,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             }
 
             if (isModifierShortcut && !event.altKey && key === "v") {
-                event.preventDefault();
-                if (!pasteCopiedNodes()) void pasteSystemClipboard();
+                // 画布内部复制优先；否则不拦截，交给原生 paste 事件读取文件 / 图片 / HTML / 文本。
+                if (pasteCopiedNodes()) event.preventDefault();
                 return;
             }
 
@@ -1962,7 +2057,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [copySelectedNodes, createGroupFromSelection, deleteConnection, deleteNodes, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
+    }, [copySelectedNodes, createGroupFromSelection, deleteConnection, deleteNodes, pasteCopiedNodes, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
 
     const handleConnectStart = useCallback(
         (event: ReactMouseEvent, nodeId: string, handleType: "source" | "target") => {
@@ -2820,18 +2915,20 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const handleImageInputChange = useCallback(
         async (event: ReactChangeEvent<HTMLInputElement>) => {
-            const file = event.target.files?.[0];
+            const files = Array.from(event.target.files || []);
             const target = uploadTargetRef.current;
-            if (!file || (!file.type.startsWith("image/") && !file.type.startsWith("video/") && !isAudioFile(file))) return;
-            const targetNode = target?.nodeId ? nodesRef.current.find((node) => node.id === target.nodeId) : null;
-            if (isPanoramaNodeType(targetNode?.type) && !file.type.startsWith("image/")) {
-                message.warning("全景图节点仅支持上传图片作为参考");
-                uploadTargetRef.current = null;
-                event.target.value = "";
-                return;
-            }
+            event.target.value = "";
+            uploadTargetRef.current = null;
+            if (!files.length) return;
 
+            const targetNode = target?.nodeId ? nodesRef.current.find((node) => node.id === target.nodeId) : null;
             if (target?.nodeId) {
+                const file = files[0];
+                if (isPanoramaNodeType(targetNode?.type) && !file.type.startsWith("image/")) {
+                    message.warning("全景图节点仅支持上传图片作为参考");
+                    return;
+                }
+                if (!file.type.startsWith("image/") && !file.type.startsWith("video/") && !isAudioFile(file)) return;
                 const hideLoading = message.loading(isAudioFile(file) ? "正在上传音频..." : file.type.startsWith("video/") ? "正在上传视频..." : "正在上传图片...", 0);
                 try {
                     if (isAudioFile(file)) {
@@ -2927,14 +3024,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     hideLoading();
                 }
             } else {
+                // 没有指定节点：走统一的类型识别，支持一次选多个文件、文本也建节点。
                 const position = target?.position || screenToCanvas((containerRef.current?.getBoundingClientRect().left || 0) + size.width / 2, (containerRef.current?.getBoundingClientRect().top || 0) + size.height / 2);
-                void (isAudioFile(file) ? createAudioFileNode(file, position) : file.type.startsWith("video/") ? createVideoFileNode(file, position) : createImageFileNode(file, position, true));
+                void ingestFiles(files, position);
             }
-
-            uploadTargetRef.current = null;
-            event.target.value = "";
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas, size.height, size.width],
+        [ingestFiles, screenToCanvas, size.height, size.width],
     );
 
     function insertAssetAt(payload: InsertAssetPayload, position?: Position, nodeId?: string) {
@@ -2993,12 +3088,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 void insertAssetAt(payload, screenToCanvas(event.clientX, event.clientY));
                 return;
             }
-            const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/") || item.type.startsWith("video/") || isAudioFile(item));
-            if (!file) return;
-            const pos = screenToCanvas(event.clientX, event.clientY);
-            void (isAudioFile(file) ? createAudioFileNode(file, pos) : file.type.startsWith("video/") ? createVideoFileNode(file, pos) : createImageFileNode(file, pos, true));
+            const files = Array.from(event.dataTransfer.files);
+            if (!files.length) return;
+            void ingestFiles(files, screenToCanvas(event.clientX, event.clientY));
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, insertAssetAt, screenToCanvas],
+        [ingestFiles, insertAssetAt, screenToCanvas],
     );
 
     const pasteAssistantImage = useCallback(
@@ -3033,11 +3127,16 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         setTitleEditing(false);
     }, [projectId, renameProject, titleDraft]);
 
-    const preventCanvasContextMenu = useCallback((event: ReactMouseEvent) => {
-        if ((event.target as HTMLElement).closest("[data-node-id]")) return;
-        event.preventDefault();
-        setContextMenu(null);
-    }, []);
+    const openCanvasContextMenu = useCallback(
+        (event: ReactMouseEvent) => {
+            if ((event.target as HTMLElement).closest("[data-node-id]")) return;
+            event.preventDefault();
+            const world = screenToCanvas(event.clientX, event.clientY);
+            setNodeCreatePosition(null);
+            setContextMenu({ type: "canvas", x: event.clientX, y: event.clientY, worldX: world.x, worldY: world.y });
+        },
+        [screenToCanvas],
+    );
 
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
@@ -4350,11 +4449,79 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [size.height, size.width, toggleBatchExpanded],
     );
 
-    useEffect(
-        () => () => {
-            if (focusAnimationRef.current) cancelAnimationFrame(focusAnimationRef.current);
-        },
-        [],
+    // 这些回调用 useCallback 固定引用，避免每次缩放/渲染都重建，从而让 CanvasNode 的 React.memo 真正生效。
+    const nodeImageSettingsOpenChange = useCallback((open: boolean) => {
+        setNodeImageSettingsOpen(open);
+        if (open) setToolbarNodeId(null);
+    }, []);
+
+    const nodeContextMenuHandler = useCallback((event: ReactMouseEvent, id: string) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setContextMenu({ type: "node", x: event.clientX, y: event.clientY, nodeId: id });
+    }, []);
+
+    const nodeHoverStart = useCallback((nodeId: string) => {
+        if (nodeDraggingRef.current) return;
+        setHoveredNodeId(nodeId);
+    }, []);
+
+    const nodeHoverEnd = useCallback((nodeId: string) => {
+        setHoveredNodeId((current) => (current === nodeId ? null : current));
+    }, []);
+
+    const retryVideoNode = useCallback((node: CanvasNodeData) => void handleRetryNode(node), [handleRetryNode]);
+
+    const viewImageNode = useCallback((node: CanvasNodeData) => setPreviewNodeId(node.id), []);
+
+    const renderNodePanel = useCallback(
+        (panelNode: CanvasNodeData) =>
+            panelNode.type === CanvasNodeType.Config ? (
+                <CanvasConfigComposer
+                    value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}
+                    inputs={configInputsById.get(panelNode.id) || EMPTY_INPUTS}
+                    onChange={(composerContent) => handleConfigNodeChange(panelNode.id, { composerContent })}
+                    onClose={() => setDialogNodeId(null)}
+                />
+            ) : panelNode.type === CanvasNodeType.Director ? null : (
+                <CanvasNodePromptPanel
+                    node={panelNode}
+                    isRunning={runningNodeId === panelNode.id}
+                    mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || EMPTY_MENTION_REFERENCES}
+                    connectedNodes={connectedNodesByNodeId.get(panelNode.id) || EMPTY_CONNECTED_NODES}
+                    videoFrameOptions={videoFrameOptionsByNodeId.get(panelNode.id) || EMPTY_VIDEO_FRAME_OPTIONS}
+                    videoResourceOptions={videoResourceOptionsByNodeId.get(panelNode.id) || EMPTY_VIDEO_RESOURCE_OPTIONS}
+                    onPromptChange={handleNodePromptChange}
+                    onConfigChange={handleConfigNodeChange}
+                    onGenerate={handleGenerateNode}
+                    onDisconnectReference={disconnectNodeReference}
+                    onStartReferenceSelection={startNodeReferenceSelection}
+                    onImageSettingsOpenChange={nodeImageSettingsOpenChange}
+                />
+            ),
+        [configInputsById, connectedNodesByNodeId, disconnectNodeReference, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, nodeImageSettingsOpenChange, runningNodeId, startNodeReferenceSelection, videoFrameOptionsByNodeId, videoResourceOptionsByNodeId],
+    );
+
+    const renderNodeContentPanel = useCallback(
+        (contentNode: CanvasNodeData) =>
+            contentNode.type === CanvasNodeType.Director ? (
+                <CanvasDirectorNodePanel onOpen={() => setOpenDirectorNodeId(contentNode.id)} />
+            ) : (
+                <CanvasConfigNodePanel
+                    node={contentNode}
+                    isRunning={runningNodeId === contentNode.id}
+                    inputSummary={getInputSummary(configInputsById.get(contentNode.id) || EMPTY_INPUTS)}
+                    videoFrameOptions={videoFrameOptionsByNodeId.get(contentNode.id) || EMPTY_VIDEO_FRAME_OPTIONS}
+                    videoResourceOptions={videoResourceOptionsByNodeId.get(contentNode.id) || EMPTY_VIDEO_RESOURCE_OPTIONS}
+                    onConfigChange={handleConfigNodeChange}
+                    onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
+                    onGenerate={(nodeId) => {
+                        const target = nodesRef.current.find((item) => item.id === nodeId);
+                        void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "");
+                    }}
+                />
+            ),
+        [configInputsById, handleConfigNodeChange, handleGenerateNode, runningNodeId, videoFrameOptionsByNodeId, videoResourceOptionsByNodeId],
     );
 
     if (!projectLoaded) return <CanvasRefreshShell />;
@@ -4431,7 +4598,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         setContextMenu(null);
                         setNodeCreatePosition(screenToCanvas(event.clientX, event.clientY));
                     }}
-                    onContextMenu={preventCanvasContextMenu}
+                    onContextMenu={openCanvasContextMenu}
                     onDrop={handleDrop}
                 >
                     <svg className="absolute left-0 top-0 h-[10000px] w-[10000px] overflow-visible" style={{ pointerEvents: "none", transform: "translateZ(0)", zIndex: 6 }}>
@@ -4475,7 +4642,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         <CanvasNode
                             key={node.id}
                             data={node}
-                            scale={viewport.k}
+                            scaleRef={viewportScaleRef}
                             isSelected={selectedNodeIds.has(node.id)}
                             isRelated={relatedHighlight.nodeIds.has(node.id)}
                             isFocusRelated={activeNodeId === node.id}
@@ -4493,78 +4660,24 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             batchRecovering={collapsingBatchIds.has(node.id)}
                             batchMotion={batchMotionById.get(node.id)}
                             showImageInfo={showImageInfo}
-                            mentionReferences={mentionReferencesByNodeId.get(node.id) || []}
+                            mentionReferences={mentionReferencesByNodeId.get(node.id) || EMPTY_MENTION_REFERENCES}
                             now={node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && (node.type === CanvasNodeType.Video || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Audio) ? canvasNow : undefined}
-                            renderPanel={(panelNode) =>
-                                panelNode.type === CanvasNodeType.Config ? (
-                                    <CanvasConfigComposer
-                                        value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}
-                                        inputs={configInputsById.get(panelNode.id) || []}
-                                        onChange={(composerContent) => handleConfigNodeChange(panelNode.id, { composerContent })}
-                                        onClose={() => setDialogNodeId(null)}
-                                    />
-                                ) : panelNode.type === CanvasNodeType.Director ? null : (
-                                    <CanvasNodePromptPanel
-                                        node={panelNode}
-                                        isRunning={runningNodeId === panelNode.id}
-                                        mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || []}
-                                        connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
-                                        videoFrameOptions={videoFrameOptionsByNodeId.get(panelNode.id) || []}
-                                        videoResourceOptions={videoResourceOptionsByNodeId.get(panelNode.id) || []}
-                                        onPromptChange={handleNodePromptChange}
-                                        onConfigChange={handleConfigNodeChange}
-                                        onGenerate={handleGenerateNode}
-                                        onDisconnectReference={disconnectNodeReference}
-                                        onStartReferenceSelection={startNodeReferenceSelection}
-                                        onImageSettingsOpenChange={(open) => {
-                                            setNodeImageSettingsOpen(open);
-                                            if (open) setToolbarNodeId(null);
-                                        }}
-                                    />
-                                )
-                            }
-                            renderNodeContent={(contentNode) =>
-                                contentNode.type === CanvasNodeType.Director ? (
-                                    <CanvasDirectorNodePanel onOpen={() => setOpenDirectorNodeId(contentNode.id)} />
-                                ) : (
-                                    <CanvasConfigNodePanel
-                                        node={contentNode}
-                                        isRunning={runningNodeId === contentNode.id}
-                                        inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
-                                        videoFrameOptions={videoFrameOptionsByNodeId.get(contentNode.id) || []}
-                                        videoResourceOptions={videoResourceOptionsByNodeId.get(contentNode.id) || []}
-                                        onConfigChange={handleConfigNodeChange}
-                                        onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
-                                        onGenerate={(nodeId) => {
-                                            const target = nodesRef.current.find((item) => item.id === nodeId);
-                                            void handleGenerateNode(nodeId, target?.metadata?.generationMode || "image", target?.metadata?.composerContent ?? target?.metadata?.prompt ?? "");
-                                        }}
-                                    />
-                                )
-                            }
+                            renderPanel={renderNodePanel}
+                            renderNodeContent={renderNodeContentPanel}
                             onMouseDown={handleNodeMouseDown}
-                            onHoverStart={(nodeId) => {
-                                if (nodeDraggingRef.current) return;
-                                setHoveredNodeId(nodeId);
-                            }}
-                            onHoverEnd={(nodeId) => {
-                                setHoveredNodeId((current) => (current === nodeId ? null : current));
-                            }}
+                            onHoverStart={nodeHoverStart}
+                            onHoverEnd={nodeHoverEnd}
                             onConnectStart={handleConnectStart}
                             onResize={handleNodeResize}
                             onContentChange={handleNodeContentChange}
                             onTitleChange={handleNodeTitleChange}
                             onToggleBatch={toggleBatchExpanded}
                             onSetBatchPrimary={setBatchPrimary}
-                            onRetry={(node) => void handleRetryNode(node)}
+                            onRetry={retryVideoNode}
                             onGenerateImage={generateImageFromTextNode}
-                            onViewImage={(node) => setPreviewNodeId(node.id)}
+                            onViewImage={viewImageNode}
                             onSelectReference={selectNodeReference}
-                            onContextMenu={(event, id) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setContextMenu({ type: "node", x: event.clientX, y: event.clientY, nodeId: id });
-                            }}
+                            onContextMenu={nodeContextMenuHandler}
                         />
                     ))}
 
@@ -4710,7 +4823,40 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
                 <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
 
-                {contextMenu ? (
+                {contextMenu?.type === "canvas" ? (
+                    <CanvasBackgroundContextMenu
+                        menu={contextMenu}
+                        canUndo={historyState.canUndo}
+                        canRedo={historyState.canRedo}
+                        onClose={() => setContextMenu(null)}
+                        onUpload={() => {
+                            handleUploadRequest(undefined, { x: contextMenu.worldX, y: contextMenu.worldY });
+                            setContextMenu(null);
+                        }}
+                        onOpenAssetLibrary={() => {
+                            assetInsertPositionRef.current = { x: contextMenu.worldX, y: contextMenu.worldY };
+                            setAssetPickerTab("library");
+                            setAssetPickerOpen(true);
+                            setContextMenu(null);
+                        }}
+                        onCreateNode={(type) => {
+                            createNode(type, { x: contextMenu.worldX, y: contextMenu.worldY });
+                            setContextMenu(null);
+                        }}
+                        onUndo={() => {
+                            undoCanvas();
+                            setContextMenu(null);
+                        }}
+                        onRedo={() => {
+                            redoCanvas();
+                            setContextMenu(null);
+                        }}
+                        onPaste={() => {
+                            if (!pasteCopiedNodes()) void pasteSystemClipboard();
+                            setContextMenu(null);
+                        }}
+                    />
+                ) : contextMenu ? (
                     <CanvasNodeContextMenu
                         menu={contextMenu}
                         canCaptureVideoFrame={contextMenuNode?.type === CanvasNodeType.Video && Boolean(contextMenuNode.metadata?.content)}
@@ -4773,7 +4919,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         </button>
                     </div>
                 ) : null}
-                <input ref={imageInputRef} type="file" accept="image/*,video/*,audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav" className="hidden" onChange={handleImageInputChange} />
+                <input ref={imageInputRef} type="file" multiple accept="image/*,video/*,audio/*,.mp3,.wav,.txt,.md,.markdown,.json,.csv,.srt,.log" className="hidden" onChange={handleImageInputChange} />
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
 
@@ -5988,6 +6134,18 @@ function sourceNodeReferenceImages(node: CanvasNodeData | null) {
 
 function isAudioFile(file: File) {
     return file.type.startsWith("audio/") || /\.(mp3|wav)$/i.test(file.name);
+}
+
+function canvasFileKind(file: File): "image" | "video" | "audio" | "text" | "unknown" {
+    if (file.type.startsWith("image/")) return "image";
+    if (file.type.startsWith("video/")) return "video";
+    if (isAudioFile(file)) return "audio";
+    if (file.type.startsWith("text/") || /\.(txt|md|markdown|json|csv|srt|log|html?)$/i.test(file.name)) return "text";
+    return "unknown";
+}
+
+function extractClipboardImageSrc(html: string) {
+    return /<img[^>]+src=["']([^"']+)["']/i.exec(html)?.[1] || "";
 }
 
 function isHiddenBatchChild(node: CanvasNodeData, nodes: CanvasNodeData[], collapsingBatchIds?: Set<string>) {

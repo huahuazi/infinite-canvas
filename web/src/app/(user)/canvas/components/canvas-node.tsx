@@ -19,7 +19,7 @@ const CanvasPanoramaViewer = dynamic(() => import("./canvas-panorama-viewer"), {
 
 type CanvasNodeProps = {
     data: CanvasNodeData;
-    scale: number;
+    scaleRef: React.RefObject<number>;
     isSelected: boolean;
     isRelated: boolean;
     isFocusRelated: boolean;
@@ -83,7 +83,7 @@ type NodeContentRendererProps = {
 
 export const CanvasNode = React.memo(function CanvasNode({
     data,
-    scale,
+    scaleRef,
     isSelected,
     isRelated,
     isFocusRelated,
@@ -215,6 +215,7 @@ export const CanvasNode = React.memo(function CanvasNode({
         (event: MouseEvent) => {
             if (!resizeRef.current.isResizing) return;
 
+            const scale = Math.max(scaleRef.current || 1, 0.01);
             const dx = (event.clientX - resizeRef.current.startX) / scale;
             const dy = (event.clientY - resizeRef.current.startY) / scale;
             const minWidth = 220;
@@ -249,7 +250,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 y: fromTop ? startBottom - height : resizeRef.current.startTop,
             });
         },
-        [data.id, onResize, scale],
+        [data.id, onResize, scaleRef],
     );
 
     const handleResizeUp = useCallback(() => {

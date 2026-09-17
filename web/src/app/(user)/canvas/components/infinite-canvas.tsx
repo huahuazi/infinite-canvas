@@ -6,6 +6,18 @@ import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ViewportTransform } from "../types";
 
+const MIN_CANVAS_SCALE = 0.05;
+const MAX_CANVAS_SCALE = 5;
+// 指数映射：让触控板捏合的位移和画布缩放比例一一对应，避免小位移跳变。
+const ZOOM_WHEEL_SENSITIVITY = 0.0022;
+
+function normalizeWheelDelta(event: { deltaX: number; deltaY: number; deltaMode: number }, pageSize: number, horizontal = false) {
+    const raw = horizontal ? event.deltaX : event.deltaY;
+    if (event.deltaMode === 1) return raw * 16;
+    if (event.deltaMode === 2) return raw * pageSize;
+    return raw;
+}
+
 type InfiniteCanvasProps = {
     containerRef: React.RefObject<HTMLDivElement | null>;
     viewport: ViewportTransform;
@@ -34,16 +46,25 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
     const scaleRef = useRef(viewport.k);
     const frameRef = useRef<number | null>(null);
     const nextViewportRef = useRef<ViewportTransform | null>(null);
+    const latestViewportRef = useRef(viewport);
+    const zoomFrameRef = useRef<number | null>(null);
+    const onViewportChangeRef = useRef(onViewportChange);
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [isPanning, setIsPanning] = useState(false);
 
     useEffect(() => {
         scaleRef.current = viewport.k;
-    }, [viewport.k]);
+        latestViewportRef.current = viewport;
+    }, [viewport]);
+
+    useEffect(() => {
+        onViewportChangeRef.current = onViewportChange;
+    }, [onViewportChange]);
 
     useEffect(
         () => () => {
             if (frameRef.current) cancelAnimationFrame(frameRef.current);
+            if (zoomFrameRef.current) cancelAnimationFrame(zoomFrameRef.current);
         },
         [],
     );
@@ -82,38 +103,44 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         };
     }, []);
 
+    // 同一帧内的多次滚轮事件合并成一次提交，缩放/平移都按最近一次的视口继续累加，避免抖动。
+    const scheduleViewport = (updater: (base: ViewportTransform) => ViewportTransform) => {
+        const next = updater(latestViewportRef.current);
+        latestViewportRef.current = next;
+        if (zoomFrameRef.current) return;
+        zoomFrameRef.current = requestAnimationFrame(() => {
+            zoomFrameRef.current = null;
+            onViewportChangeRef.current(latestViewportRef.current);
+        });
+    };
+
     const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
 
         const rect = containerRef.current?.getBoundingClientRect();
 
-        // 双指捏合（macOS 触控板映射为 Ctrl+滚轮）或按住 Cmd/Ctrl 滚轮 -> 缩放，步长加大便于快速调到合适比例。
+        // 双指捏合（macOS 触控板映射为 Ctrl+滚轮）或按住 Cmd/Ctrl 滚轮 -> 缩放，指数映射并锚定鼠标位置。
         if (event.ctrlKey || event.metaKey) {
             event.preventDefault();
-            const delta = -event.deltaY;
-            const factor = Math.pow(1.32, delta / 100);
-            const newScale = Math.min(Math.max(viewport.k * factor, 0.05), 5);
             if (!rect) return;
+            const delta = -normalizeWheelDelta(event, rect.height);
             const mouseX = event.clientX - rect.left;
             const mouseY = event.clientY - rect.top;
-            const worldX = (mouseX - viewport.x) / viewport.k;
-            const worldY = (mouseY - viewport.y) / viewport.k;
-            onViewportChange({
-                x: mouseX - worldX * newScale,
-                y: mouseY - worldY * newScale,
-                k: newScale,
+            scheduleViewport((base) => {
+                const newScale = Math.min(Math.max(base.k * Math.exp(delta * ZOOM_WHEEL_SENSITIVITY), MIN_CANVAS_SCALE), MAX_CANVAS_SCALE);
+                const worldX = (mouseX - base.x) / base.k;
+                const worldY = (mouseY - base.y) / base.k;
+                return { x: mouseX - worldX * newScale, y: mouseY - worldY * newScale, k: newScale };
             });
             return;
         }
 
         // 普通滚轮 / 触控板双指滑动 -> 平移画布（与手机地图一致）。
         event.preventDefault();
-        onViewportChange({
-            x: viewport.x - event.deltaX,
-            y: viewport.y - event.deltaY,
-            k: viewport.k,
-        });
+        const deltaX = normalizeWheelDelta(event, rect?.width ?? 1200, true);
+        const deltaY = normalizeWheelDelta(event, rect?.height ?? 800);
+        scheduleViewport((base) => ({ x: base.x - deltaX, y: base.y - deltaY, k: base.k }));
     };
 
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -216,6 +243,43 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         };
         container.addEventListener("wheel", preventWheelScroll, { passive: false });
         return () => container.removeEventListener("wheel", preventWheelScroll);
+    }, [containerRef]);
+
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        // Safari 的触控板捏合派发非标准 gesture 事件，单独适配；以 gesturestart 时的视口为基准避免累乘。
+        let gestureBase: ViewportTransform | null = null;
+        const startGesture = (event: Event) => {
+            event.preventDefault();
+            gestureBase = { ...latestViewportRef.current };
+        };
+        const applyGesture = (event: Event) => {
+            event.preventDefault();
+            const gesture = event as Event & { scale: number; clientX: number; clientY: number };
+            const base = gestureBase ?? latestViewportRef.current;
+            const rect = container.getBoundingClientRect();
+            const mouseX = gesture.clientX - rect.left;
+            const mouseY = gesture.clientY - rect.top;
+            const nextScale = Math.min(Math.max(base.k * gesture.scale, MIN_CANVAS_SCALE), MAX_CANVAS_SCALE);
+            const worldX = (mouseX - base.x) / base.k;
+            const worldY = (mouseY - base.y) / base.k;
+            onViewportChangeRef.current({ x: mouseX - worldX * nextScale, y: mouseY - worldY * nextScale, k: nextScale });
+        };
+        const endGesture = (event: Event) => {
+            event.preventDefault();
+            gestureBase = null;
+        };
+
+        container.addEventListener("gesturestart", startGesture);
+        container.addEventListener("gesturechange", applyGesture);
+        container.addEventListener("gestureend", endGesture);
+        return () => {
+            container.removeEventListener("gesturestart", startGesture);
+            container.removeEventListener("gesturechange", applyGesture);
+            container.removeEventListener("gestureend", endGesture);
+        };
     }, [containerRef]);
 
     const temporaryTool = isSpacePressed;

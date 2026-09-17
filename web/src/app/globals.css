@@ -465,6 +465,17 @@
     }
 }
 
+/* 画布连线数据流动画，由 canvas-connections.tsx 引用 */
+@keyframes canvas-connection-flow {
+    from {
+        stroke-dashoffset: 0;
+    }
+
+    to {
+        stroke-dashoffset: -40;
+    }
+}
+
 ::view-transition-old(root),
 ::view-transition-new(root) {
     animation: none;

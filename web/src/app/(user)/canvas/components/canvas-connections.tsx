@@ -4,6 +4,8 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasConnection, CanvasNodeData, ConnectionHandle, Position } from "../types";
 
+const CONNECTION_FLOW_COLOR = "#4da3ff";
+
 export function ConnectionPath({
     connection,
     from,
@@ -55,6 +57,7 @@ export function ConnectionPath({
                 fill="none"
                 style={{ filter: active ? `drop-shadow(0 0 8px ${theme.node.activeStroke}66)` : undefined, pointerEvents: "none" }}
             />
+            {active ? <path d={pathD} stroke={CONNECTION_FLOW_COLOR} strokeWidth={2} strokeLinecap="round" strokeDasharray="9 31" fill="none" style={{ pointerEvents: "none", animation: "canvas-connection-flow 1s linear infinite", filter: `drop-shadow(0 0 6px ${CONNECTION_FLOW_COLOR}aa)` }} /> : null}
         </g>
     );
 }
@@ -74,5 +77,10 @@ export function ActiveConnectionPath({ node, handle, mouseWorld, target }: { nod
     const distance = Math.abs(snappedEndX - snappedStartX);
     const pathD = `M ${snappedStartX} ${snappedStartY} C ${snappedStartX + distance * 0.5} ${snappedStartY}, ${snappedEndX - distance * 0.5} ${snappedEndY}, ${snappedEndX} ${snappedEndY}`;
 
-    return <path d={pathD} stroke={theme.node.activeStroke} strokeWidth="2" fill="none" strokeDasharray="5,5" />;
+    return (
+        <>
+            <path d={pathD} stroke={theme.node.activeStroke} strokeWidth="2" fill="none" strokeDasharray="5,5" />
+            <path d={pathD} stroke={CONNECTION_FLOW_COLOR} strokeWidth="2" strokeLinecap="round" strokeDasharray="9 31" fill="none" style={{ animation: "canvas-connection-flow 1s linear infinite" }} />
+        </>
+    );
 }
