@@ -3,7 +3,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { listCanvasProjects, saveCanvasProject, syncCanvasProjects } from "@/services/api/canvas-tasks";
+import { fetchCanvasProject, listCanvasProjects, saveCanvasProject, syncCanvasProjects } from "@/services/api/canvas-tasks";
 import { fetchUserConfig } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -34,6 +34,12 @@ export type CanvasProject = {
     viewport: ViewportTransform;
     sidePanel: CanvasSidePanelState;
     agentPanel: CanvasSidePanelState;
+    // 列表接口只回传摘要，内容按需加载：
+    // nodeCount/connectionCount 是服务端给出的真实计数（摘要态下 nodes/connections 为空数组）；
+    // contentLoaded 为 false 表示内容尚未拉取，此时禁止保存，避免用空数据覆盖服务端。
+    nodeCount?: number;
+    connectionCount?: number;
+    contentLoaded?: boolean;
 };
 
 type CanvasStore = {
@@ -42,6 +48,7 @@ type CanvasStore = {
     createProject: (title?: string, options?: { agentConfig?: CanvasAgentConfig; pendingAgentRequest?: CanvasPendingAgentRequest }) => string;
     importProject: (project: Partial<CanvasProject>) => string;
     openProject: (id: string) => CanvasProject | null;
+    loadProjectContent: (id: string) => Promise<CanvasProject | null>;
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => void;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "agentConfig" | "autoTitlePending" | "backgroundMode" | "showImageInfo" | "viewport" | "sidePanel" | "agentPanel" | "pendingAgentRequest">>) => void;
@@ -74,8 +81,6 @@ function waitForUserStoreHydration() {
 }
 
 function queueProjectSave(project: CanvasProject) {
-    const token = useUserStore.getState().token;
-    const syncEnabled = accountCanvasSyncEnabled;
     const previous = projectSaveTimers.get(project.id);
     if (previous) clearTimeout(previous);
 
@@ -83,12 +88,33 @@ function queueProjectSave(project: CanvasProject) {
         project.id,
         setTimeout(() => {
             projectSaveTimers.delete(project.id);
+            const token = useUserStore.getState().token;
+            const syncEnabled = accountCanvasSyncEnabled;
             if (
                 !token ||
                 !syncEnabled ||
                 !accountCanvasSyncEnabled ||
                 useUserStore.getState().token !== token
             ) {
+                return;
+            }
+            // 摘要态（内容未加载）不能直接回写：该画布 nodes 为空，写上去会清空服务端数据。
+            // 先把完整内容拉回来，再用本次改动覆盖元数据（如列表页重命名）。
+            if (project.contentLoaded === false) {
+                void useCanvasStore
+                    .getState()
+                    .loadProjectContent(project.id)
+                    .then((loaded) => {
+                        if (!loaded || loaded.contentLoaded === false) return;
+                        return saveCanvasProject(token, {
+                            ...loaded,
+                            ...project,
+                            nodes: loaded.nodes,
+                            connections: loaded.connections,
+                            contentLoaded: true,
+                        });
+                    })
+                    .catch(() => undefined);
                 return;
             }
             void saveCanvasProject(token, project).catch(() => undefined);
@@ -105,6 +131,54 @@ function cancelProjectSaves(ids: string[]) {
     });
 }
 
+// 列表接口只回传摘要，而本地缓存里可能仍存有完整内容。合并时必须按「本地内容是否完整 + 谁更新」判断，
+// 绝不能用摘要覆盖本地的完整画布 —— 否则会出现空画布，甚至把空数据写回服务端。
+function mergeCanvasProjectSummaries(
+    remoteSummaries: CanvasProject[],
+    localProjects: CanvasProject[],
+): CanvasProject[] {
+    const localById = new Map(
+        localProjects.map((project) => [project.id, project]),
+    );
+    const merged: CanvasProject[] = [];
+
+    for (const remote of remoteSummaries) {
+        const local = localById.get(remote.id);
+        localById.delete(remote.id);
+        const localHasContent = Boolean(local) && local!.contentLoaded !== false;
+        const localIsNewer =
+            localHasContent &&
+            Date.parse(local!.updatedAt || "") >=
+                Date.parse(remote.updatedAt || "");
+
+        if (localIsNewer) {
+            // 本地内容齐全且不落后：保留完整数据，仅用摘要里的计数校正展示值。
+            merged.push({
+                ...local!,
+                nodeCount: remote.nodeCount ?? local!.nodeCount,
+                connectionCount: remote.connectionCount ?? local!.connectionCount,
+            });
+            continue;
+        }
+
+        // 服务端更新，或本地没有内容：采用摘要，节点内容留待打开画布时按需拉取。
+        const remoteHasContent = remote.contentLoaded !== false;
+        merged.push({
+            ...remote,
+            nodes: remoteHasContent ? remote.nodes || [] : [],
+            connections: remoteHasContent ? remote.connections || [] : [],
+            contentLoaded: remoteHasContent,
+        });
+    }
+
+    // 本地独有（服务端还没有）的画布：原样保留完整数据。
+    for (const local of localById.values()) merged.push(local);
+
+    return merged.sort(
+        (a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""),
+    );
+}
+
 async function reconcileCanvasProjects(
     token: string,
     remoteProjects: CanvasProject[],
@@ -116,34 +190,26 @@ async function reconcileCanvasProjects(
     const missingProjects = localProjects.filter(
         (project) => !remoteById.has(project.id),
     );
-    const existingLocalProjects = localProjects.filter((project) =>
-        remoteById.has(project.id),
-    );
-    const projects = missingProjects.length
-        ? await syncCanvasProjects(token, missingProjects)
-            .then((syncedProjects) =>
-                mergeCanvasProjects(
-                    syncedProjects,
-                    existingLocalProjects,
-                ),
-            )
-            .catch(() =>
-                mergeCanvasProjects(remoteProjects, localProjects),
-            )
-        : mergeCanvasProjects(remoteProjects, existingLocalProjects);
+
+    // 本地独有的画布先推进服务端；失败也不阻塞，本地数据仍然完整保留。
+    if (missingProjects.length) {
+        await syncCanvasProjects(token, missingProjects).catch(() => undefined);
+    }
 
     localProjects.forEach((project) => {
+        // 内容未加载的画布不能回写，否则会用空 nodes 覆盖服务端。
+        if (project.contentLoaded === false) return;
         const remote = remoteById.get(project.id);
         if (
             remote &&
             Date.parse(project.updatedAt || "") >
-            Date.parse(remote.updatedAt || "")
+                Date.parse(remote.updatedAt || "")
         ) {
             queueProjectSave(project);
         }
     });
 
-    return projects;
+    return mergeCanvasProjectSummaries(remoteProjects, localProjects);
 }
 
 const canvasStorage: PersistStorage<CanvasStore> = {
@@ -294,6 +360,38 @@ export const useCanvasStore = create<CanvasStore>()(
             },
             openProject: (id) =>
                 get().projects.find((item) => item.id === id) || null,
+            // 按需拉取画布完整内容。列表接口只给摘要，因此打开画布前必须走这里补齐。
+            loadProjectContent: async (id) => {
+                const project = get().projects.find((item) => item.id === id);
+                if (!project) return null;
+                if (project.contentLoaded !== false) return project;
+
+                const token = useUserStore.getState().token;
+                if (!token) return project;
+
+                try {
+                    const full = await fetchCanvasProject(token, id);
+                    if (!full || !Array.isArray(full.nodes)) return project;
+                    const loaded: CanvasProject = {
+                        ...project,
+                        ...full,
+                        contentLoaded: true,
+                        nodeCount: full.nodes.length,
+                        connectionCount: Array.isArray(full.connections)
+                            ? full.connections.length
+                            : 0,
+                    };
+                    set((state) => ({
+                        projects: state.projects.map((item) =>
+                            item.id === id ? loaded : item,
+                        ),
+                    }));
+                    return loaded;
+                } catch {
+                    // 拉取失败时保持摘要态：界面提示重试，绝不写入空内容。
+                    return project;
+                }
+            },
             renameProject: (id, title) => {
                 const project = get().projects.find(
                     (item) => item.id === id,

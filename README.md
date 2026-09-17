@@ -133,7 +133,9 @@ claude mcp add infinite-canvas -- infinite-canvas-agent mcp
 | 官方 OpenAPI（推荐） | `https://ark.cn-beijing.volces.com/api/v3` | 火山控制台「API Key 管理」创建 |
 | Agent Plan 企业版 | `https://ark.cn-beijing.volces.com/api/plan/v3` | Agent Plan 专属 API Key |
 
-在渠道配置中填写上表地址与 Key，模型名填官方 Model ID（如 `doubao-seedance-2-5-260628`），也可填 `ep-` 开头的推理接入点 ID。Base URL 只填域名时会自动补齐 `/api/v3`。
+在渠道配置中**协议选择「火山方舟（Ark）」**（会自动填入官方 OpenAPI 地址），再填 API Key 与模型名。模型名填官方 Model ID（如 `doubao-seedance-2-5-260628`），也可填 `ep-` 开头的推理接入点 ID。Base URL 只填域名时会自动补齐 `/api/v3`。
+
+> 也可以用「OpenAI」协议 + 上述 Ark 地址的组合，平台会按接口地址自动识别；但显式选「火山方舟（Ark）」更直观，且自定义网关地址时也能正确识别。
 
 **参考素材要求**（官方约束）：
 

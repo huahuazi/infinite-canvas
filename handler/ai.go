@@ -623,7 +623,7 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "grok2api") && (strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video") || strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video-1.5")) && path == "/videos" {
 		return "/videos/generations"
 	}
-	if isArkSeedanceVideo(channel.BaseURL, modelName) {
+	if isArkSeedanceVideo(channel, modelName) {
 		if path == "/videos" {
 			return "/contents/generations/tasks"
 		}
@@ -638,8 +638,12 @@ func isCogVideoX3Model(modelName string) bool {
 	return strings.EqualFold(strings.TrimSpace(modelName), "cogvideox-3")
 }
 
-func isArkSeedanceVideo(baseURL string, modelName string) bool {
-	base := strings.ToLower(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+func isArkSeedanceVideo(channel model.ModelChannel, modelName string) bool {
+	// 后台渠道显式选择「火山方舟（Ark）」协议时直接命中，不必再猜接口地址。
+	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark") {
+		return true
+	}
+	base := strings.ToLower(strings.TrimRight(strings.TrimSpace(channel.BaseURL), "/"))
 	model := strings.ToLower(strings.TrimSpace(modelName))
 	if strings.Contains(model, "seedance") || strings.Contains(model, "doubao-seedance") {
 		return true

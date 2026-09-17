@@ -4,9 +4,22 @@ import { createZip } from "@/lib/zip";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob } from "@/services/image-storage";
 import type { CanvasExportAsset, CanvasExportFile } from "../export-types";
-import type { CanvasProject } from "../stores/use-canvas-store";
+import { useCanvasStore, type CanvasProject } from "../stores/use-canvas-store";
 
-export async function exportCanvasProjects(projects: CanvasProject[], fileName = "无限画布") {
+// 列表接口只回传摘要，导出前必须把完整内容补齐，否则会导出空画布。
+async function ensureProjectsContent(projects: CanvasProject[]): Promise<CanvasProject[]> {
+    const { loadProjectContent } = useCanvasStore.getState();
+    return Promise.all(
+        projects.map(async (project) =>
+            project.contentLoaded === false
+                ? (await loadProjectContent(project.id)) || project
+                : project,
+        ),
+    );
+}
+
+export async function exportCanvasProjects(inputProjects: CanvasProject[], fileName = "无限画布") {
+    const projects = await ensureProjectsContent(inputProjects);
     const zipFiles: { name: string; data: BlobPart }[] = [];
     const exportedProjects = await Promise.all(
         projects.map(async (project) => {

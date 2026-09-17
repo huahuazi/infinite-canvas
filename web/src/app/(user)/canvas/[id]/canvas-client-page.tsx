@@ -392,6 +392,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const hydrated = useCanvasStore((state) => state.hydrated);
     const createProject = useCanvasStore((state) => state.createProject);
     const openProject = useCanvasStore((state) => state.openProject);
+    const loadProjectContent = useCanvasStore((state) => state.loadProjectContent);
     const updateProject = useCanvasStore((state) => state.updateProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
     const deleteProjects = useCanvasStore((state) => state.deleteProjects);
@@ -580,18 +581,29 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         }
 
         const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
-            const restoredSessions = syncAssistantReferences(project.chatSessions || [], restoredNodes, true);
+            // 列表接口只回传摘要（不含节点），这里先按需把完整内容拉回来再渲染；
+            // 否则会渲染出一张空画布，甚至把空 nodes 回写覆盖服务端数据。
+            const loaded =
+                project.contentLoaded === false
+                    ? await loadProjectContent(projectId)
+                    : project;
+            if (!loaded || loaded.contentLoaded === false) {
+                message.error("画布内容加载失败，请刷新页面重试");
+                return;
+            }
+
+            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(loaded.nodes));
+            const restoredSessions = syncAssistantReferences(loaded.chatSessions || [], restoredNodes, true);
             setNodes(restoredNodes);
-            setConnections(project.connections);
+            setConnections(loaded.connections);
             setChatSessions(restoredSessions);
-            setActiveChatId(project.activeChatId || null);
-            setAgentConfig(project.agentConfig || null);
-            setBackgroundMode(project.backgroundMode);
-            setShowImageInfo(project.showImageInfo || false);
-            setViewport(project.viewport);
-            setSidePanel(project.sidePanel || DEFAULT_CANVAS_SIDE_PANEL);
-            const restoredAgentPanel = project.agentPanel || DEFAULT_CANVAS_AGENT_PANEL;
+            setActiveChatId(loaded.activeChatId || null);
+            setAgentConfig(loaded.agentConfig || null);
+            setBackgroundMode(loaded.backgroundMode);
+            setShowImageInfo(loaded.showImageInfo || false);
+            setViewport(loaded.viewport);
+            setSidePanel(loaded.sidePanel || DEFAULT_CANVAS_SIDE_PANEL);
+            const restoredAgentPanel = loaded.agentPanel || DEFAULT_CANVAS_AGENT_PANEL;
             setAgentPanel(restoredAgentPanel);
             setAssistantMounted(restoredAgentPanel.open);
             historyRef.current = { past: [], future: [] };
@@ -601,15 +613,15 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             }
             lastHistoryRef.current = {
                 nodes: restoredNodes,
-                connections: project.connections,
-                backgroundMode: project.backgroundMode,
-                showImageInfo: project.showImageInfo || false,
+                connections: loaded.connections,
+                backgroundMode: loaded.backgroundMode,
+                showImageInfo: loaded.showImageInfo || false,
             };
             setHistoryState({ canUndo: false, canRedo: false });
             setProjectLoaded(true);
         };
         void restore();
-    }, [hydrated, openProject, projectId, router]);
+    }, [hydrated, loadProjectContent, message, openProject, projectId, router]);
 
     useEffect(() => {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;

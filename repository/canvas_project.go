@@ -23,6 +23,28 @@ func ListUserCanvasProjects(userID string) ([]model.CanvasProject, error) {
 	return projects, err
 }
 
+// GetUserCanvasProject 按 id 读取单个画布（含完整内容）。
+func GetUserCanvasProject(userID string, projectID string) (model.CanvasProject, bool, error) {
+	db, err := DB()
+	if err != nil {
+		return model.CanvasProject{}, false, err
+	}
+
+	var project model.CanvasProject
+	err = db.Where(
+		"user_id = ? AND id = ? AND deleted_at = ''",
+		strings.TrimSpace(userID),
+		strings.TrimSpace(projectID),
+	).First(&project).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.CanvasProject{}, false, nil
+	}
+	if err != nil {
+		return model.CanvasProject{}, false, err
+	}
+	return project, true, nil
+}
+
 func SaveUserCanvasProject(
 	project model.CanvasProject,
 ) (model.CanvasProject, error) {

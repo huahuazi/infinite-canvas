@@ -7,13 +7,24 @@ import (
 	"github.com/tigerowo/infinite-canvas/service"
 )
 
+// UserCanvasProjects 画布列表：只返回摘要，避免把每个画布的完整内容（含内联图片）全量下发。
 func UserCanvasProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := service.CurrentUserCanvasProjects(r.Context())
+	projects, err := service.CurrentUserCanvasProjectSummaries(r.Context())
 	if err != nil {
 		FailError(w, err)
 		return
 	}
 	OK(w, projects)
+}
+
+// UserCanvasProject 单个画布详情：返回完整内容，供打开画布时按需加载。
+func UserCanvasProject(w http.ResponseWriter, r *http.Request, id string) {
+	project, err := service.CurrentUserCanvasProject(r.Context(), id)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, project)
 }
 
 func SaveUserCanvasProject(w http.ResponseWriter, r *http.Request) {

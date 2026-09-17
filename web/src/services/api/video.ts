@@ -50,6 +50,8 @@ function aiApiUrl(config: AiConfig, path: string) {
 function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
     const protocol = channelProtocolForConfig(config);
     if (protocol === "kie" || protocol === "apimart" || protocol === "grok2api") return false;
+    // 后台渠道显式选择「火山方舟（Ark）」协议时直接判定，不必再猜接口地址。
+    if (protocol === "ark") return true;
     const channel = localChannelForActiveModel(config);
     const baseUrl = channel?.baseUrl || config.baseUrl || "";
     // 渠道地址明确指向火山方舟（官方域名或 /api/v3、/api/plan/v3）时走 Ark 原生协议。

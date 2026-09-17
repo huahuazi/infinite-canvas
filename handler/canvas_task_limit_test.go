@@ -3,6 +3,8 @@ package handler
 import (
 	"strings"
 	"testing"
+
+	"github.com/tigerowo/infinite-canvas/model"
 )
 
 // 回归：旧实现用 io.LimitReader 直接截断，超限时不报错，
@@ -57,20 +59,24 @@ func TestSummarizeCanvasTaskResponseHandlesNonJSON(t *testing.T) {
 func TestIsArkSeedanceVideoRecognizesBaseURLs(t *testing.T) {
 	cases := []struct {
 		name     string
+		protocol string
 		baseURL  string
 		model    string
 		expected bool
 	}{
-		{"标准 OpenAPI + 接入点 ID", "https://ark.cn-beijing.volces.com/api/v3", "ep-20250101-abcdef", true},
-		{"标准 OpenAPI + 模型名", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seedance-2-5-260628", true},
-		{"Agent Plan", "https://ark.cn-beijing.volces.com/api/plan/v3", "doubao-seedance-2.0", true},
-		{"带尾斜杠", "https://ark.cn-beijing.volces.com/api/v3/", "doubao-seedance-2-5-260628", true},
-		{"非 Ark 渠道", "https://api.kie.ai/api/v1", "kling-v3", false},
-		{"非 Ark 渠道上的其他模型", "https://api.apimart.ai/v1", "grok-imagine-video", false},
+		{"标准 OpenAPI + 接入点 ID", "", "https://ark.cn-beijing.volces.com/api/v3", "ep-20250101-abcdef", true},
+		{"标准 OpenAPI + 模型名", "", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seedance-2-5-260628", true},
+		{"Agent Plan", "", "https://ark.cn-beijing.volces.com/api/plan/v3", "doubao-seedance-2.0", true},
+		{"带尾斜杠", "", "https://ark.cn-beijing.volces.com/api/v3/", "doubao-seedance-2-5-260628", true},
+		{"显式 ark 协议 + 自定义域名", "ark", "https://my-gateway.example.com", "doubao-seedance-2-5-260628", true},
+		{"显式 ark 协议 + 接入点 ID", "ark", "https://my-gateway.example.com", "ep-20250101-abcdef", true},
+		{"非 Ark 渠道", "", "https://api.kie.ai/api/v1", "kling-v3", false},
+		{"非 Ark 渠道上的其他模型", "", "https://api.apimart.ai/v1", "grok-imagine-video", false},
 	}
 	for _, item := range cases {
-		if got := isArkSeedanceVideo(item.baseURL, item.model); got != item.expected {
-			t.Errorf("%s：isArkSeedanceVideo(%q, %q) = %v，期望 %v", item.name, item.baseURL, item.model, got, item.expected)
+		channel := model.ModelChannel{Protocol: item.protocol, BaseURL: item.baseURL}
+		if got := isArkSeedanceVideo(channel, item.model); got != item.expected {
+			t.Errorf("%s：isArkSeedanceVideo(%q/%q, %q) = %v，期望 %v", item.name, item.protocol, item.baseURL, item.model, got, item.expected)
 		}
 	}
 }

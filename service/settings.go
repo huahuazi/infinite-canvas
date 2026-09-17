@@ -80,7 +80,7 @@ func AdminTestChannelModel(index *int, channel model.ModelChannel, modelName str
 	if IsMiniMaxChannel(resolved) {
 		return "MiniMax-H3 是异步视频模型，请在视频创作台测试生成。", nil
 	}
-	if isArkAgentPlanChannel(resolved) || isSeedanceModelName(modelName) {
+	if isArkChannel(resolved) || isSeedanceModelName(modelName) {
 		return testArkSeedanceChannelModel(resolved, modelName)
 	}
 	return testAdminChannelModel(resolved, modelName)
@@ -360,6 +360,22 @@ func normalizeModelChannelBaseURL(baseURL string) string {
 func isArkAgentPlanChannel(channel model.ModelChannel) bool {
 	baseURL := strings.ToLower(normalizeModelChannelBaseURL(channel.BaseURL))
 	return strings.HasSuffix(baseURL, "/api/plan/v3")
+}
+
+// isArkChannel 判断渠道是否属于火山方舟：显式选择 ark 协议，或地址命中官方 OpenAPI / Agent Plan。
+func isArkChannel(channel model.ModelChannel) bool {
+	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark") {
+		return true
+	}
+	return isArkOpenAPIChannel(channel) || isArkAgentPlanChannel(channel)
+}
+
+func isArkOpenAPIChannel(channel model.ModelChannel) bool {
+	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark") {
+		return true
+	}
+	baseURL := strings.ToLower(normalizeModelChannelBaseURL(channel.BaseURL))
+	return strings.HasSuffix(baseURL, "/api/v3")
 }
 
 func isSeedanceModelName(modelName string) bool {
@@ -887,8 +903,11 @@ func testArkSeedanceChannelModel(channel model.ModelChannel, modelName string) (
 	if strings.TrimSpace(channel.APIKey) == "" {
 		return "", safeMessageError{message: "缺少 API Key"}
 	}
-	if !isArkAgentPlanChannel(channel) {
+	if !isArkChannel(channel) {
 		return "Seedance 视频模型不会发送 /chat/completions 文本测试。已检查 Base URL、API Key 和模型名非空；未调用视频生成接口，因此未验证套餐额度或模型权限。", nil
+	}
+	if isArkOpenAPIChannel(channel) {
+		return "火山方舟官方 OpenAPI / Seedance 视频模型配置格式已通过。后台测试不会调用视频生成接口，因此未验证 API Key、模型权限或账户余额；请在视频创作台实际生成一次验证。", nil
 	}
 	return "Agent Plan / Seedance 视频模型配置格式已通过。后台测试不会调用视频生成接口，因此未验证 API Key、套餐额度或模型权限；请在画布中使用视频生成验证。", nil
 }

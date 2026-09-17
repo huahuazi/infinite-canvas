@@ -343,6 +343,7 @@ export function AppConfigModal() {
                                                     { label: "APIMart", value: "apimart" },
                                                     { label: "KIE", value: "kie" },
                                                     { label: "MiMo", value: "mimo" },
+                                                    { label: "火山方舟（Ark）", value: "ark" },
                                                 ]}
                                                 onChange={(protocol: LocalModelChannel["protocol"]) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
                                             />
