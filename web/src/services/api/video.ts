@@ -4,7 +4,7 @@ import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
-import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_TASK_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
+import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
@@ -76,7 +76,8 @@ function arkVideoApiUrl(config: AiConfig, taskId: string) {
     return `${baseUrl}${ARK_VIDEO_TASK_PATH}${taskId ? `/${encodeURIComponent(taskId)}` : ""}`;
 }
 
-// Flatkey（router.flatkey.ai）只改任务路径：/v1/generation/tasks，其余与 Ark 一致。
+// Flatkey（router.flatkey.ai）复用 Ark 的请求体与解析，但接口是标准的 /v1/videos：
+// 文档里的 /v1/generation/tasks 只对部分通道类型开放，seedance 系列会被上游拒绝。
 function isFlatkeyVideoRequest(config: AiConfig) {
     if (channelProtocolForConfig(config) === "flatkey") return true;
     const channel = localChannelForActiveModel(config);
@@ -88,7 +89,7 @@ function flatkeyVideoApiUrl(config: AiConfig, taskId: string) {
     const channel = localChannelForActiveModel(config);
     const baseUrl = normalizeFlatkeyBaseUrl(channel?.baseUrl || config.baseUrl || "");
     if (!baseUrl) throw new VideoRequestError("Flatkey 渠道地址不能为空");
-    return `${baseUrl}${FLATKEY_VIDEO_TASK_PATH}${taskId ? `/${encodeURIComponent(taskId)}` : ""}`;
+    return `${baseUrl}${FLATKEY_VIDEO_PATH}${taskId ? `/${encodeURIComponent(taskId)}` : ""}`;
 }
 
 function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
@@ -754,6 +755,24 @@ function normalizeArkVideoResponse(payload: ApiVideoResponse): VideoResponse {
     });
 }
 
+// Flatkey 的响应没有统一信封：创建返回 { id }，轮询可能返回 { status, video_url }、
+// { data: {...} } 或 Ark 风格的 content[]，这里做一次宽松归一化。
+function normalizeFlatkeyVideoResponse(payload: ApiVideoResponse): VideoResponse {
+    const root = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+    const inner = root.data && typeof root.data === "object" && !Array.isArray(root.data) ? (root.data as Record<string, unknown>) : root;
+    const status = firstString(inner.status, inner.state, inner.task_status, root.status, root.state);
+    const videoUrl = firstString(inner.video_url, inner.videoUrl, inner.url, root.video_url, root.url, firstVideoUrl(inner), firstVideoUrl(root));
+    const errorMessage = firstString(nestedMessage(inner.error), nestedMessage(root.error), firstString(inner.message, root.message));
+    return normalizeVideoResponse({
+        ...root,
+        ...inner,
+        task_id: firstString(inner.id, inner.task_id, root.id, root.task_id),
+        status: status || (videoUrl ? "completed" : errorMessage ? "failed" : "queued"),
+        ...(videoUrl ? { video_url: videoUrl, url: videoUrl } : {}),
+        ...(errorMessage ? { error: { message: errorMessage } } : {}),
+    });
+}
+
 function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {
     if (!payload) throw new Error("接口没有返回视频任务");
     if (isVideoEnvelope(payload)) {
@@ -773,6 +792,7 @@ function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: 
     if (isVideoEnvelope(payload) && payload.code !== 0) {
         throw new VideoRequestError(payload.msg || payload.message || "视频生成失败", payload);
     }
+    if (isFlatkeyVideoRequest(config)) return normalizeFlatkeyVideoResponse(payload);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return normalizeGeminiVideoResponse(payload);
     if (isArkSeedanceVideoRequest(config, model)) return normalizeArkVideoResponse(payload);
     if (isMiniMaxH3Config(config, model)) {
@@ -832,14 +852,16 @@ async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string
         }
     }
 
+    const duration = normalizeSeedanceDuration(config.videoSeconds, model);
     const body: Record<string, unknown> = {
         model,
         content,
         ratio: arkRatioForRequest(model, config.size, Boolean(input.firstFrame || input.lastFrame)),
         resolution: normalizeSeedanceResolution(config.vquality, model),
-        duration: normalizeSeedanceDuration(config.videoSeconds, model),
         watermark: boolConfig(config.videoWatermark, false),
     };
+    // 火山方舟用 duration=-1 表示「智能」；Flatkey 只接受 4-30，选了智能就不传，交给上游默认。
+    if (!(isFlatkeyVideoRequest(config) && duration === -1)) body.duration = duration;
     const taskType = arkTaskType(config, input);
     if (taskType) body.omni_reference_task_type = taskType;
     // 以下均为可选参数，只在用户显式启用时才写入。
@@ -1125,9 +1147,10 @@ function isVideoEnvelope(payload: ApiVideoResponse): payload is ApiVideoEnvelope
 
 function readAxiosError(error: unknown, fallback: string) {
     if (error instanceof VideoRequestError) return { message: humanizeVideoError(error.message), detail: error.detail || error.stack || error.message };
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
+    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; message?: string; code?: number | string }>(error)) {
         const responseData = error.response?.data;
-        const message = responseData?.msg || responseData?.error?.message || (error.response?.status ? `${fallback}：${error.response.status}` : fallback);
+        // flatkey 的错误体是 { code, message, data }，message 在顶层，必须一并读取。
+        const message = responseData?.msg || responseData?.error?.message || responseData?.message || (error.response?.status ? `${fallback}：${error.response.status}` : fallback);
         return { message: humanizeVideoError(message), detail: responseData || error.message };
     }
     return { message: humanizeVideoError(error instanceof Error ? error.message : fallback), detail: error instanceof Error ? error.stack || error.message : error };
@@ -1143,7 +1166,8 @@ const videoErrorHints: Array<{ pattern: RegExp; hint: string }> = [
     { pattern: /AuthenticationError|invalid.{0,12}api.?key/i, hint: "API Key 无效或未授权，请在渠道配置里更新火山方舟 API Key。" },
     { pattern: /ModelNotOpen|not activated|InvalidModel|model.{0,14}not.{0,14}(found|exist)/i, hint: "模型不可用：请确认该模型已在火山控制台开通，且模型 ID 填写正确。" },
     { pattern: /content.{0,24}(type|format).{0,24}(not|invalid)|Unsupported/i, hint: "素材格式不被支持，请检查格式与体积是否符合火山方舟要求。" },
-    { pattern: /resolution|ratio|duration.{0,20}(invalid|exceed)/i, hint: "参数超出该模型允许范围，请调整时长 / 分辨率 / 比例。" },
+    // 必须加单词边界：旧写法让 /ratio/ 命中了 "gene(ratio)ns"，导致「通道不支持该接口」也被误判成参数越界。
+    { pattern: /\b(?:resolution|ratio|duration)\b/i, hint: "参数超出该模型允许范围，请调整时长 / 分辨率 / 比例。" },
 ];
 
 function humanizeVideoError(message: string) {

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.7.5 - 2026-09-17
+
++ [修复] Flatkey 视频任务接口改用标准 `/v1/videos`（创建）与 `/v1/videos/{id}`（轮询）：上游对 seedance 系列会拒绝 `/v1/generation/tasks`（`this channel type is only available on /v1/videos and /v1/video/generations`）
++ [修复] Flatkey 轮询响应解析放宽：兼容 `{status,video_url}`、`{data:{…}}` 与 `content[].video_url.url` 三种结构
++ [修复] Flatkey 错误信息读取顶层 `message`：此前只认 `msg` / `error.message`，真实原因被吞成「视频生成失败：400」
++ [修复] Flatkey 选「智能」时长（`duration=-1`）时不再下发该字段：上游只接受 4-30，改由上游取默认值
++ [修复] 视频错误提示正则误判：裸 `ratio` 命中 `gene(ratio)ns`，把「通道不支持该接口」误报成参数越界
+
 ## v0.7.4 - 2026-09-17
 
 + [新增] 新增 Flatkey（router.flatkey.ai）渠道协议：视频走它自己的异步任务接口 `/v1/generation/tasks`，请求体与火山方舟同构（`content[]` + `ratio` + `duration`），后台渠道与本地渠道都能直接选；任务创建、轮询与产物地址解析（`content[].video_url.url`）已打通

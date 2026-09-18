@@ -20,5 +20,6 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 ## 渠道协议
 
-+ [新增] Flatkey 渠道协议：后台「协议」新增 Flatkey，接口地址填 `https://router.flatkey.ai/v1`，模型手输 `seedance-2.5` 即可；视频生成走 `/v1/generation/tasks` 异步任务接口，复用火山方舟的请求体格式与任务式轮询，产物地址从 `content[].video_url.url` 提取
-+ [新增] 本地渠道（未登录直连上游）同样支持 Flatkey：任务路径在前端按 `/v1/generation/tasks` 拼接，误贴完整任务路径会自动裁剪；同渠道的非视频接口（如 `/v1/images/generations`）保持原样透传
++ [新增] Flatkey 渠道协议：后台「协议」新增 Flatkey，接口地址填 `https://router.flatkey.ai/v1`，模型手输 `seedance-2.5` 即可；复用火山方舟的请求体格式（`content[]` + `ratio` + `duration`），接口走 Flatkey 标准的 `/v1/videos`（创建）与 `/v1/videos/{id}`（轮询）
++ [修复] Flatkey 任务接口地址：文档里的 `/v1/generation/tasks` 只对部分「通道类型」开放，seedance 系列会被上游拒绝（`this channel type is only available on /v1/videos and /v1/video/generations`），现改为标准 `/v1/videos`；误贴完整接口路径会自动裁剪，非视频接口（如 `/v1/images/generations`）保持原样透传
++ [修复] 视频错误提示误判：参数越界的正则用了裸 `ratio`，命中了 `gene(ratio)ns`，导致「通道不支持该接口」也被追加成「参数超出该模型允许范围」，现改为单词边界匹配

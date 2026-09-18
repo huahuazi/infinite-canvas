@@ -138,9 +138,11 @@ export function normalizeArkBaseUrl(baseUrl: string) {
     return value;
 }
 
-// Flatkey（router.flatkey.ai）的异步视频任务协议：POST /v1/generation/tasks。
-// 请求体与火山方舟同构（content[] + ratio + duration），只有任务路径不同。
-export const FLATKEY_VIDEO_TASK_PATH = "/generation/tasks";
+// Flatkey（router.flatkey.ai）的视频接口：POST /v1/videos，轮询 GET /v1/videos/{id}。
+// 请求体与火山方舟同构（content[] + ratio + duration），所以复用 Ark 的构造与解析，只固定接口路径。
+// 注意：flatkey 文档里的 /v1/generation/tasks 只对部分「通道类型」开放，
+// seedance 系列会返回 "this channel type is only available on /v1/videos and /v1/video/generations"。
+export const FLATKEY_VIDEO_PATH = "/videos";
 
 export function isFlatkeyHost(baseUrl: string) {
     return /(^|\.)flatkey\.ai$/i.test(hostnameOf(baseUrl));
@@ -150,12 +152,18 @@ export function isFlatkeyBaseUrl(baseUrl: string) {
     return isFlatkeyHost(baseUrl);
 }
 
-// 归一化 Flatkey Base URL：裁掉用户误贴的完整任务路径，并为裸域名补齐 /v1。
+// 归一化 Flatkey Base URL：裁掉用户误贴的完整接口路径（/videos、/video/generations、/generation/tasks），
+// 并为裸域名补齐 /v1，避免拼出 /v1/videos/videos。
 export function normalizeFlatkeyBaseUrl(baseUrl: string) {
     let value = String(baseUrl || "").trim().replace(/\/+$/, "");
     if (!value) return "";
-    const taskIndex = value.toLowerCase().indexOf(FLATKEY_VIDEO_TASK_PATH.toLowerCase());
-    if (taskIndex >= 0) value = value.slice(0, taskIndex).replace(/\/+$/, "");
+    for (const suffix of ["/generation/tasks", "/video/generations", FLATKEY_VIDEO_PATH]) {
+        const index = value.toLowerCase().indexOf(suffix.toLowerCase());
+        if (index >= 0) {
+            value = value.slice(0, index).replace(/\/+$/, "");
+            break;
+        }
+    }
     if (/\/v\d+$/i.test(value)) return value;
     return `${value}/v1`;
 }

@@ -6,19 +6,21 @@ import (
 	"github.com/tigerowo/infinite-canvas/model"
 )
 
-// Flatkey 的视频任务协议与火山方舟同构，但任务路径是 /generation/tasks。
-// 这里守住三件事：路径映射正确、不被 Ark 的 seedance 模型名判定抢走、其他接口原样透传。
-func TestResolveAIProxyPathFlatkeyVideoTask(t *testing.T) {
+// Flatkey 复用火山方舟的请求体格式，但任务接口是标准的 /v1/videos。
+// 上游对 seedance 系列会明确拒绝 /v1/generation/tasks：
+//   {"code":"invalid_request","message":"this channel type is only available on /v1/videos and /v1/video/generations"}
+// 所以路径必须原样透传，同时不能被 Ark 分支改写成 /contents/generations/tasks。
+func TestResolveAIProxyPathFlatkeyKeepsStandardVideoPath(t *testing.T) {
 	channel := model.ModelChannel{Protocol: "flatkey", BaseURL: "https://router.flatkey.ai/v1"}
 
-	if got := resolveAIProxyPath(channel, "seedance-2.5", "/videos"); got != "/generation/tasks" {
-		t.Fatalf("创建任务路径 = %q，期望 /generation/tasks", got)
+	if got := resolveAIProxyPath(channel, "seedance-2.5", "/videos"); got != "/videos" {
+		t.Fatalf("创建任务路径 = %q，期望 /videos", got)
 	}
-	if got := resolveAIProxyPath(channel, "seedance-2.5", "/videos/task-123"); got != "/generation/tasks/task-123" {
-		t.Fatalf("轮询路径 = %q，期望 /generation/tasks/task-123", got)
+	if got := resolveAIProxyPath(channel, "seedance-2.5", "/videos/task-123"); got != "/videos/task-123" {
+		t.Fatalf("轮询路径 = %q，期望 /videos/task-123", got)
 	}
 	if isArkSeedanceVideo(channel, "seedance-2.5") {
-		t.Fatal("flatkey 渠道不应被判定为火山方舟，否则路径会变成 /contents/generations/tasks")
+		t.Fatal("flatkey 渠道不应被判定为火山方舟，否则路径会被改写成 /contents/generations/tasks")
 	}
 	// 同一个渠道仍可复用 [OI] 生图等接口，非视频路径保持原样。
 	if got := resolveAIProxyPath(channel, "seedance-2.5", "/images/generations"); got != "/images/generations" {

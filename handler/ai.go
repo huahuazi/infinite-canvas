@@ -620,23 +620,11 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 		}
 		return path
 	}
-	// Flatkey：视频任务协议与火山方舟同构（content[] 请求体 + 任务式轮询），只有任务路径不同。
-	// 必须放在 Ark 判定之前 —— Ark 判定会命中模型名里的 seedance。
-	if isFlatkeyChannel(channel) {
-		if path == "/videos" {
-			return "/generation/tasks"
-		}
-		if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
-			taskID := strings.TrimSpace(strings.TrimPrefix(path, "/videos/"))
-			if taskID != "" && !strings.Contains(taskID, "/") {
-				return "/generation/tasks/" + url.PathEscape(taskID)
-			}
-		}
-		return path
-	}
 	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "grok2api") && (strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video") || strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video-1.5")) && path == "/videos" {
 		return "/videos/generations"
 	}
+	// 注意：Flatkey 等第三方通道复用 Ark 的请求体格式，但任务接口是标准的 /videos，
+	// 不能被这个分支改写成 /contents/generations/tasks；isArkSeedanceVideo 已对 flatkey 协议返回 false。
 	if isArkSeedanceVideo(channel, modelName) {
 		if path == "/videos" {
 			return "/contents/generations/tasks"
