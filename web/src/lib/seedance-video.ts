@@ -138,6 +138,28 @@ export function normalizeArkBaseUrl(baseUrl: string) {
     return value;
 }
 
+// Flatkey（router.flatkey.ai）的异步视频任务协议：POST /v1/generation/tasks。
+// 请求体与火山方舟同构（content[] + ratio + duration），只有任务路径不同。
+export const FLATKEY_VIDEO_TASK_PATH = "/generation/tasks";
+
+export function isFlatkeyHost(baseUrl: string) {
+    return /(^|\.)flatkey\.ai$/i.test(hostnameOf(baseUrl));
+}
+
+export function isFlatkeyBaseUrl(baseUrl: string) {
+    return isFlatkeyHost(baseUrl);
+}
+
+// 归一化 Flatkey Base URL：裁掉用户误贴的完整任务路径，并为裸域名补齐 /v1。
+export function normalizeFlatkeyBaseUrl(baseUrl: string) {
+    let value = String(baseUrl || "").trim().replace(/\/+$/, "");
+    if (!value) return "";
+    const taskIndex = value.toLowerCase().indexOf(FLATKEY_VIDEO_TASK_PATH.toLowerCase());
+    if (taskIndex >= 0) value = value.slice(0, taskIndex).replace(/\/+$/, "");
+    if (/\/v\d+$/i.test(value)) return value;
+    return `${value}/v1`;
+}
+
 export function hostnameOf(value: string) {
     try {
         return new URL(value).hostname;

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.7.4 - 2026-09-17
+
++ [新增] 新增 Flatkey（router.flatkey.ai）渠道协议：视频走它自己的异步任务接口 `/v1/generation/tasks`，请求体与火山方舟同构（`content[]` + `ratio` + `duration`），后台渠道与本地渠道都能直接选；任务创建、轮询与产物地址解析（`content[].video_url.url`）已打通
+
 ## v0.7.3 - 2026-09-17
 
 + [优化] 双击节点改为把节点放大到接近铺满视口，全屏预览保留在悬浮工具条与节点右键菜单

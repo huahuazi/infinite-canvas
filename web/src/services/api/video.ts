@@ -4,7 +4,7 @@ import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
-import { ARK_VIDEO_TASK_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isArkBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
+import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_TASK_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
@@ -54,6 +54,9 @@ function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
     if (protocol === "ark") return true;
     const channel = localChannelForActiveModel(config);
     const baseUrl = channel?.baseUrl || config.baseUrl || "";
+    // Flatkey 的视频任务协议与 Ark 同构（content[] 请求体 + 任务式轮询），复用 Ark 的请求体与响应解析；
+    // 只有任务路径不同，由 flatkeyVideoApiUrl 单独处理。
+    if (protocol === "flatkey" || isFlatkeyBaseUrl(baseUrl)) return true;
     // 渠道地址明确指向火山方舟（官方域名或 /api/v3、/api/plan/v3）时走 Ark 原生协议。
     if (isArkBaseUrl(baseUrl)) return true;
     // 云端渠道在前端拿不到渠道地址，此时退回按模型名判断：seedance 一定属于火山方舟。
@@ -73,6 +76,21 @@ function arkVideoApiUrl(config: AiConfig, taskId: string) {
     return `${baseUrl}${ARK_VIDEO_TASK_PATH}${taskId ? `/${encodeURIComponent(taskId)}` : ""}`;
 }
 
+// Flatkey（router.flatkey.ai）只改任务路径：/v1/generation/tasks，其余与 Ark 一致。
+function isFlatkeyVideoRequest(config: AiConfig) {
+    if (channelProtocolForConfig(config) === "flatkey") return true;
+    const channel = localChannelForActiveModel(config);
+    return isFlatkeyBaseUrl(channel?.baseUrl || config.baseUrl || "");
+}
+
+function flatkeyVideoApiUrl(config: AiConfig, taskId: string) {
+    if (usesAccountProxy(config)) return taskId ? `/api/v1/videos/${encodeURIComponent(taskId)}` : "/api/v1/videos";
+    const channel = localChannelForActiveModel(config);
+    const baseUrl = normalizeFlatkeyBaseUrl(channel?.baseUrl || config.baseUrl || "");
+    if (!baseUrl) throw new VideoRequestError("Flatkey 渠道地址不能为空");
+    return `${baseUrl}${FLATKEY_VIDEO_TASK_PATH}${taskId ? `/${encodeURIComponent(taskId)}` : ""}`;
+}
+
 function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
     if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
         const channel = localChannelForActiveModel(config);
@@ -80,6 +98,9 @@ function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
     }
     if (!usesAccountProxy(config) && isMiniMaxH3Config(config, model)) {
         return miniMaxApiUrl(config, `/v2/query/video_generation/${encodeURIComponent(id)}`);
+    }
+    if (isFlatkeyVideoRequest(config)) {
+        return flatkeyVideoApiUrl(config, id);
     }
     if (isArkSeedanceVideoRequest(config, model)) {
         return arkVideoApiUrl(config, id);
@@ -152,9 +173,11 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
             ? geminiActionUrl(channel?.baseUrl || config.baseUrl, model, "predictLongRunning")
             : !accountProxy && isMiniMaxH3Config(config, model)
                 ? miniMaxApiUrl(config, "/v2/video_generation")
-                : isArkSeedanceVideoRequest(config, model)
-                    ? arkVideoApiUrl(config, "")
-                    : aiApiUrl(config, !accountProxy && (isGrok2APIVideoConfig(config, model) || isCogVideoX3Model(model)) ? "/videos/generations" : "/videos");
+                : isFlatkeyVideoRequest(config)
+                    ? flatkeyVideoApiUrl(config, "")
+                    : isArkSeedanceVideoRequest(config, model)
+                        ? arkVideoApiUrl(config, "")
+                        : aiApiUrl(config, !accountProxy && (isGrok2APIVideoConfig(config, model) || isCogVideoX3Model(model)) ? "/videos/generations" : "/videos");
         const requestBody = !accountProxy && isGeminiConfig(config, model) ? withoutVideoModel(body) : body;
         const created = directProvider
             ? await (await import("@/services/api/direct-ai")).createDirectVideoTask(config, directProvider, body)
@@ -1291,6 +1314,11 @@ function firstVideoUrl(value: unknown, depth = 0): string {
     const record = value as Record<string, unknown>;
     const direct = firstString(record.video_url, record.videoUrl, record.url, record.remixed_from_video_id, record.output_url, record.download_url, record.file_url);
     if (/^https?:\/\//.test(direct)) return direct;
+    // video_url 也可能是对象或数组（例如 Flatkey 的 content[].video_url.url），继续往里找。
+    for (const key of ["video_url", "videoUrl"]) {
+        const found = firstVideoUrl(record[key], depth + 1);
+        if (found) return found;
+    }
     for (const key of ["video_result", "video", "data", "output", "result", "content", "metadata"]) {
         const found = firstVideoUrl(record[key], depth + 1);
         if (found) return found;

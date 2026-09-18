@@ -620,6 +620,20 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 		}
 		return path
 	}
+	// Flatkey：视频任务协议与火山方舟同构（content[] 请求体 + 任务式轮询），只有任务路径不同。
+	// 必须放在 Ark 判定之前 —— Ark 判定会命中模型名里的 seedance。
+	if isFlatkeyChannel(channel) {
+		if path == "/videos" {
+			return "/generation/tasks"
+		}
+		if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+			taskID := strings.TrimSpace(strings.TrimPrefix(path, "/videos/"))
+			if taskID != "" && !strings.Contains(taskID, "/") {
+				return "/generation/tasks/" + url.PathEscape(taskID)
+			}
+		}
+		return path
+	}
 	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "grok2api") && (strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video") || strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video-1.5")) && path == "/videos" {
 		return "/videos/generations"
 	}
@@ -638,7 +652,15 @@ func isCogVideoX3Model(modelName string) bool {
 	return strings.EqualFold(strings.TrimSpace(modelName), "cogvideox-3")
 }
 
+func isFlatkeyChannel(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), "flatkey")
+}
+
 func isArkSeedanceVideo(channel model.ModelChannel, modelName string) bool {
+	// Flatkey 有同构但路径不同的任务协议，不能被下面按模型名（seedance）的判定抢走。
+	if isFlatkeyChannel(channel) {
+		return false
+	}
 	// 后台渠道显式选择「火山方舟（Ark）」协议时直接命中，不必再猜接口地址。
 	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark") {
 		return true

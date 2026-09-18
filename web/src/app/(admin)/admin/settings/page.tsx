@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
-import { arkChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
+import { arkChannelTips, flatkeyChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -746,7 +746,7 @@ export default function AdminSettingsPage() {
                                     dataSource={channelTableData}
                                     columns={[
                                         { title: "名称", dataIndex: "name", render: (value) => value || "未命名渠道" },
-                                        { title: "协议", dataIndex: "protocol", width: 96, render: (value) => <Tag>{value === "ark" ? "火山方舟" : value || "openai"}</Tag> },
+                                        { title: "协议", dataIndex: "protocol", width: 96, render: (value) => <Tag>{value === "ark" ? "火山方舟" : value === "flatkey" ? "Flatkey" : value || "openai"}</Tag> },
                                         { title: "状态", dataIndex: "enabled", width: 96, render: (value) => <Tag color={value ? "success" : "default"}>{value ? "已启用" : "已停用"}</Tag> },
                                         {
                                             title: "模型",
@@ -837,6 +837,7 @@ export default function AdminSettingsPage() {
                                             { label: "KIE", value: "kie" },
                                             { label: "MiMo", value: "mimo" },
                                             { label: "火山方舟（Ark）", value: "ark" },
+                                            { label: "Flatkey", value: "flatkey" },
                                         ]}
                                         onChange={(protocol: AdminModelChannel["protocol"]) => {
                                             channelForm.setFieldValue("baseUrl", modelChannelDefaultBaseUrls[protocol]);
@@ -875,7 +876,7 @@ export default function AdminSettingsPage() {
                                         </span>
                                     }
                                     rules={[{ required: true, message: "请输入接口地址" }]}
-                                    extra={channelProtocol === "ark" ? arkChannelTips.baseUrl : undefined}
+                                    extra={channelProtocol === "ark" ? arkChannelTips.baseUrl : channelProtocol === "flatkey" ? flatkeyChannelTips.baseUrl : undefined}
                                 >
                                     <Input />
                                 </Form.Item>
@@ -886,7 +887,7 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item label="渠道可用模型" extra={channelProtocol === "ark" ? arkChannelTips.models : undefined}>
+                                <Form.Item label="渠道可用模型" extra={channelProtocol === "ark" ? arkChannelTips.models : channelProtocol === "flatkey" ? flatkeyChannelTips.models : undefined}>
                                     <Space.Compact style={{ width: "100%" }}>
                                         <Form.Item name="models" noStyle>
                                             <Select mode="tags" maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: model, value: model }))} />

@@ -344,6 +344,7 @@ export function AppConfigModal() {
                                                     { label: "KIE", value: "kie" },
                                                     { label: "MiMo", value: "mimo" },
                                                     { label: "火山方舟（Ark）", value: "ark" },
+                                                    { label: "Flatkey", value: "flatkey" },
                                                 ]}
                                                 onChange={(protocol: LocalModelChannel["protocol"]) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
                                             />
