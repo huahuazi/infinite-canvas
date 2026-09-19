@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/huahuazi/infinite-canvas"><img src="https://img.shields.io/github/stars/huahuazi/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
-  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.7.5-2563eb?style=flat-square" alt="Version"></a>
+  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.7.6-2563eb?style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f97316?style=flat-square" alt="License"></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white" alt="Docker ready"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16.2-000000?style=flat-square&logo=nextdotjs" alt="Next.js"></a>
@@ -105,11 +105,13 @@ npm link        # 之后可直接使用 infinite-canvas-agent 命令
 
 1. 终端运行 `infinite-canvas-agent`，保持该终端不关闭（关闭即断线）
 2. 从输出中复制 `Connect token`（`Local URL` 固定为 `http://127.0.0.1:17371`，不用记）
-3. 浏览器打开画布链接并追加连接参数（把 `你的token` 换成上一步复制的内容）：
+3. 浏览器打开画布链接，并在 `#` 后追加连接参数（把 `你的token` 换成上一步复制的内容）：
    ```
-   http://localhost:3000/canvas?agentUrl=http://127.0.0.1:17371&agentToken=你的token
+   http://localhost:3000/canvas#agent=http://127.0.0.1:17371&token=你的token
    ```
-4. 画布右上角出现绿色"已连接本地 Agent"徽标即成功；对 AI 助手说"读一下当前画布"即可开始操作
+   凭据写在 `#` 之后（fragment），不会进入访问日志、Referer 与浏览器历史；页面读入后会把 fragment 从地址栏立即清除，所以刷新后不会重复携带。
+   也可以在画布右侧"创作 Agent"面板顶部的接入面板里直接粘贴地址与 token，点"连接本机 Agent"，不用手改链接。
+4. 画布左下角出现"画布 Agent 已接入"徽标即成功；对 AI 助手说"读一下当前画布"即可开始操作
 
 **给 AI 助手装 MCP（一次性）**：
 

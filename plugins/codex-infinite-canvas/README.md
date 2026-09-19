@@ -40,7 +40,7 @@ Windows PowerShell 将 `$(pwd)` 替换为 `$PWD`，Windows CMD 替换为 `%cd%`�
 
 1. 启动本地 Agent 服务 `infinite-canvas-agent`
 2. 从启动输出读取 `Local URL` 和 `Connect token`
-3. 打开画布地址 `http://localhost:3000/canvas?agentUrl=<Local URL>&agentToken=<Connect token>`
+3. 打开画布地址并把凭据写在 `#` 之后 `http://localhost:3000/canvas#agent=<Local URL>&token=<Connect token>`（fragment 不进入访问日志与 Referer，页面读入后会立即清除）
 4. 通过 `canvas` 技能使用 MCP 工具操作画布
 
 ## 目录结构

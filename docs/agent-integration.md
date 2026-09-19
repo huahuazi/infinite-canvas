@@ -27,13 +27,18 @@ infinite-canvas-agent                                    # 启动
 `agent` 随 docker-compose 一并部署在服务器上（容器 `infinite-canvas-agent`），且 Go 后端提供**同源反向代理**（`/api/agent/*`），浏览器与远程 Agent 都不需要接触 token：
 
 - **浏览器（用户零操作）**：画布页面自动探测同源 `/api/agent/health`，探测到即自动连接，无需任何 URL 参数或 token。
-- **Codex / Claude（远程一行连接）**，走画布同域已放行端口即可：
+- **Codex / Claude（远程一条命令接入）**：MCP 地址就是画布站点自己的同源地址，把 `<服务器地址>` 换成你平时打开画布的地址（含端口，例如 `http://1.2.3.4:3000`）：
   ```bash
-  codex mcp add infinite-canvas --transport http http://<服务器IP>:3100/api/agent/mcp
+  # Claude Code
+  claude mcp add infinite-canvas --transport http <服务器地址>/api/agent/mcp
+  # Codex（HTTP 服务器用 --url，没有 --transport 选项）
+  codex mcp add infinite-canvas --url <服务器地址>/api/agent/mcp
   ```
-- 亦可通过 agent 容器直连端口 `17371`（需云安全组放行）：`http://<服务器IP>:17371/mcp`。
+  命令里的地址与画布页面同源，由 Go 后端反代到 agent 容器，因此外部 Agent 也不需要接触 token。
+- agent 容器端口已绑定到宿主机 `127.0.0.1`，**不再对公网开放** `17371`；不要再试图用 `<服务器IP>:17371` 直连。
 
-> 部署说明：`docker-compose.yml` 中 `AGENT_TOKEN` 由 `.env` 提供，Go 容器与 agent 容器共享同一 token，浏览器与远程 Agent 均无感。
+> 部署说明：`docker-compose.yml` 中 app 与 agent 两个服务共用 `.env` 里的同一个 `AGENT_TOKEN`，浏览器与远程 Agent 均无感。
+> 反代目标由 `AGENT_PROXY_URL` 控制（默认 `http://agent:17371`，即 compose 服务名，容器网络内可直连）。
 
 ## 画布能力
 
@@ -75,7 +80,9 @@ infinite-canvas-agent
 claude mcp add infinite-canvas -- infinite-canvas-agent mcp
 
 # 3. 打开画布网页（开发环境默认地址）
-#    http://localhost:3000/canvas?agentUrl=<Local URL>&agentToken=<Connect token>
+#    http://localhost:3000/canvas#agent=<Local URL>&token=<Connect token>
+#    凭据写在 # 之后（fragment），不会进入浏览器历史、访问日志与 Referer；
+#    页面读入后会立刻把 fragment 从地址栏清除。
 ```
 
 ## 常见问题与排查
@@ -100,8 +107,9 @@ curl http://127.0.0.1:17371/health
 **排查**：
 
 - 确认 `~/.infinite-canvas/canvas-agent.json` 存在且包含有效 token。
-- 如果 Agent 服务重启过，token 会变化，需要按新输出重新打开画布链接（刷新网页并按最新 `Local URL`/`Connect token` 重新拼接 URL）。
+- 如果 Agent 服务重启过，token 会变化，需要按新输出重新打开画布链接（刷新网页并按最新 `Local URL`/`Connect token` 重新生成 `#agent=…&token=…`）。
 - MCP 进程与网页应读取同一份配置，若 token 不一致，重启各相关进程后重试。
+- 也可以直接在侧边栏“服务器托管 Agent / 本地 Agent”接入面板里粘贴地址与 token 后点“连接本机 Agent”，面板会给出具体失败原因。
 
 ### 无画布连接
 
@@ -109,7 +117,7 @@ curl http://127.0.0.1:17371/health
 
 **排查**：
 
-- 确认浏览器已打开画布地址，且 URL 上带 `agentUrl` 与 `agentToken` 参数（粘贴后注意参数是否完整）。
+- 确认浏览器已打开画布地址，且地址栏的 `#` 后带了 `agent=<地址>` 与 `token=<token>`（粘贴后注意是否完整）。
 - 确认画布与本地 Agent 服务指向同一份配置（同一用户目录）。
 - 刷新画布页面重新建立连接后重试。
 
@@ -122,6 +130,36 @@ curl http://127.0.0.1:17371/health
 - 写入操作需在网页侧边栏二次确认，检查侧边栏是否有待确认的写入请求。
 - 确认当前选中了正确的画布/画布模式（新建 `mode=new`、最近 `mode=recent`、选择 `mode=choose`）。
 
+### 服务器托管模式返回 401
+
+**现象**：画布页面显示“缺少连接 token / token 无效或已失效”，或者 `curl <服务器地址>/api/agent/health` 返回 `ok`，但画布就是连不上；浏览器网络面板里 `/api/agent/events`、`/api/agent/canvas/state` 返回 `401`。
+
+**原因**：app 容器与 agent 容器没有用同一个 `AGENT_TOKEN`。app 容器读 `.env` 里的 `AGENT_TOKEN` 并把它注入 `x-canvas-agent-token` 请求头；agent 容器也读同一个变量做校验。`.env` 里没配时 agent 容器会自行随机生成 token，app 容器却注入空值，于是 `/health`（不需要鉴权）正常、`/events`（需要鉴权）401。
+
+**排查**：
+
+1. 检查 `.env` 里是否有非空的 `AGENT_TOKEN`，例如：
+   ```bash
+   grep AGENT_TOKEN .env
+   ```
+   没有就补一行，值用随机串（`openssl rand -hex 18` 生成）。
+2. 确认 app 与 agent 两个容器读到的是同一个值：
+   ```bash
+   docker compose exec app printenv AGENT_TOKEN
+   docker compose exec agent printenv AGENT_TOKEN
+   ```
+   两条输出必须完全一致且非空；改完 `.env` 需要 `docker compose up -d` 重建容器才会生效。
+3. 确认反代目标正确（默认 `http://agent:17371`，容器网络内直连）：
+   ```bash
+   docker compose exec app printenv AGENT_PROXY_URL
+   ```
+4. 复查后端启动日志里是否有中文告警：
+   ```bash
+   docker compose logs app | grep 'Agent 反代'
+   ```
+   出现“未配置 AGENT_TOKEN”或“未配置 AGENT_PROXY_URL”说明 `.env` 还没配好。
+
+**注意**：agent 容器的 `17371` 端口只绑定在宿主机 `127.0.0.1`，公网访问不到，这是预期行为；接入请始终走画布站点同源的 `<服务器地址>/api/agent/mcp`。
 ### 命名冲突
 
 **现象**：`mcp add` 报重名或工具前缀混乱。

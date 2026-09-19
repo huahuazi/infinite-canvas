@@ -11,6 +11,19 @@
 infinite-canvas-agent mcp
 ```
 
+## 服务器托管模式：一条命令接入
+
+画布按 `docker-compose.yml` 部署时，agent 与画布同源托管，浏览器零配置；外部 Agent 也只需要画布站点自己的地址（把 `<服务器地址>` 换成你打开画布的地址，含端口）：
+
+```bash
+# Claude Code
+claude mcp add infinite-canvas --transport http <服务器地址>/api/agent/mcp
+# Codex（HTTP 服务器用 --url，没有 --transport 选项）
+codex mcp add infinite-canvas --url <服务器地址>/api/agent/mcp
+```
+
+`/api/agent/mcp` 由 Go 后端同源反代到 agent 容器，因此这条命令不需要 token。agent 容器的 `17371` 端口只绑定宿主机 `127.0.0.1`，不对外网开放，不要用 `<服务器IP>:17371` 直连。
+
 ## MCP 工具
 
 接入后在 Agent 侧可用的工具名如下（不同 Agent 前缀规则不同，规则见下表）：
@@ -37,7 +50,7 @@ infinite-canvas-agent mcp
    ```bash
    infinite-canvas-agent
    ```
-   然后按网页提示在画布地址上追加 `?agentUrl=<Local URL>&agentToken=<Connect token>`。
+   然后在画布地址的 `#` 后追加 `agent=<Local URL>&token=<Connect token>`（fragment 不进入访问日志与 Referer，页面读入后立即清除）；也可以直接在画布助手侧边栏的接入面板里粘贴地址与 token 后点“连接本机 Agent”。
 
 2. **token 自动读取**：本地 Agent 启动后会自动把连接令牌写入 `~/.infinite-canvas/canvas-agent.json`。MCP 进程与网页读取同一份配置，因此无需手动配置 token。
 
@@ -50,4 +63,12 @@ infinite-canvas-agent mcp
 ## 排查
 
 - 工具调用超时或失败：确认本地 Agent 服务仍在运行（`curl http://127.0.0.1:17371/health` 应返回 `ok`）。
-- 提示“无画布连接”：确认网页画布已打开，且 URL 上带正确的 `agentUrl` 与 `agentToken` 参数。
+- 提示“无画布连接”：确认网页画布已打开，且地址栏 `#` 后带正确的 `agent=<地址>` 与 `token=<token>`。
+- **托管模式下 `/health` 返回 `ok` 但画布连不上、`/api/agent/events` 返回 401**：说明 app 容器与 agent 容器没共用同一个 `AGENT_TOKEN`。在部署目录检查并补齐 `.env`：
+  ```bash
+  grep AGENT_TOKEN .env                            # 需非空，值用 openssl rand -hex 18 生成
+  docker compose exec app printenv AGENT_TOKEN
+  docker compose exec agent printenv AGENT_TOKEN   # 两条输出必须完全一致
+  docker compose logs app | grep 'Agent 反代'       # 后端启动时的中文告警
+  ```
+  改完 `.env` 后 `docker compose up -d` 重建容器才生效；反代目标默认 `http://agent:17371`，可用 `AGENT_PROXY_URL` 覆盖。

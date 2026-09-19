@@ -10,10 +10,11 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { channelProtocolForConfig, type AiConfig } from "@/stores/use-config-store";
+import { useImageThumbnailSrc } from "@/hooks/use-image-thumbnail-src";
 import type { CanvasNodeMetadata } from "../types";
 
-export type CanvasVideoFrameOption = { nodeId: string; label: string; previewUrl?: string };
-export type CanvasVideoResourceOption = { nodeId: string; kind: "text" | "image" | "video" | "audio"; label: string; previewUrl?: string; text?: string };
+export type CanvasVideoFrameOption = { nodeId: string; label: string; previewUrl?: string; storageKey?: string };
+export type CanvasVideoResourceOption = { nodeId: string; kind: "text" | "image" | "video" | "audio"; label: string; previewUrl?: string; storageKey?: string; text?: string };
 
 type CanvasVideoSettingsPopoverProps = {
     config: AiConfig;
@@ -247,13 +248,17 @@ function PickerMenu<T extends { nodeId: string }>({ items, value, theme, renderP
 }
 
 function FramePreview({ option }: { option?: CanvasVideoFrameOption }) {
-    if (option?.previewUrl) return <img src={option.previewUrl} alt="" className="size-9 shrink-0 rounded-md object-cover" />;
+    // 36px 小图用缩略图渲染，缺失时回退 previewUrl。
+    const thumbnailSrc = useImageThumbnailSrc(option?.storageKey, option?.previewUrl);
+    if (option?.previewUrl) return <img src={thumbnailSrc || undefined} alt="" className="size-9 shrink-0 rounded-md object-cover" />;
     return <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-white/10"><ImageIcon className="size-4 opacity-55" /></span>;
 }
 
 function ResourcePreview({ option, theme, small = false }: { option?: CanvasVideoResourceOption; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; small?: boolean }) {
     const size = small ? "size-5" : "size-9";
-    if (option?.kind === "image" && option.previewUrl) return <img src={option.previewUrl} alt="" className={[size, "shrink-0 rounded-md object-cover"].join(" ")} />;
+    // 只有图片小图用缩略图；视频 <video> 与文字/音频图标保持原样。
+    const thumbnailSrc = useImageThumbnailSrc(option?.kind === "image" ? option.storageKey : undefined, option?.previewUrl);
+    if (option?.kind === "image" && option.previewUrl) return <img src={thumbnailSrc || undefined} alt="" className={[size, "shrink-0 rounded-md object-cover"].join(" ")} />;
     if (option?.kind === "video" && option.previewUrl) return <video src={option.previewUrl} className={[size, "shrink-0 rounded-md bg-black object-cover"].join(" ")} muted preload="metadata" />;
     const Icon = option?.kind === "audio" ? Music2 : option?.kind === "video" ? VideoIcon : option?.kind === "text" ? FileText : ImageIcon;
     return <span className={["flex shrink-0 items-center justify-center rounded-md", size].join(" ")} style={{ background: theme.node.fill }}><Icon className="size-4 opacity-55" /></span>;

@@ -7,6 +7,7 @@ import { ChevronRight, Image as ImageIcon, Maximize2, Music2, Pause, Play, Refre
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
+import { useImageThumbnailSrc } from "@/hooks/use-image-thumbnail-src";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { CanvasNodeType, type CanvasNodeData, type Position } from "../types";
@@ -61,6 +62,8 @@ type CanvasNodeProps = {
 type NodeContentRendererProps = {
     node: CanvasNodeData;
     theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+    /** 画布缩放 ref：图片节点据此判断显示设备像素是否已超过缩略图长边。 */
+    scaleRef: React.RefObject<number>;
     isSelected: boolean;
     isEditingContent: boolean;
     textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -409,6 +412,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         <NodeContent
                             node={data}
                             theme={theme}
+                            scaleRef={scaleRef}
                             isSelected={isSelected}
                             now={now}
                             isEditingContent={isEditingContent}
@@ -637,6 +641,7 @@ function ImageNodeContent(props: NodeContentRendererProps) {
     return (
         <ImageContent
             node={props.node}
+            scaleRef={props.scaleRef}
             isBatchRoot={props.isBatchRoot}
             batchCount={props.batchCount}
             batchExpanded={props.batchExpanded}
@@ -656,6 +661,7 @@ function PanoramaNodeContent(props: NodeContentRendererProps) {
     return (
         <ImageContent
             node={props.node}
+            scaleRef={props.scaleRef}
             isBatchRoot={props.isBatchRoot}
             batchCount={props.batchCount}
             batchExpanded={props.batchExpanded}
@@ -749,6 +755,7 @@ function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
 
 function ImageContent({
     node,
+    scaleRef,
     isBatchRoot,
     batchCount,
     batchExpanded,
@@ -759,6 +766,7 @@ function ImageContent({
     media,
 }: {
     node: CanvasNodeData;
+    scaleRef: React.RefObject<number>;
     isBatchRoot: boolean;
     batchCount: number;
     batchExpanded: boolean;
@@ -770,13 +778,15 @@ function ImageContent({
 }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const isBatchChild = Boolean(node.metadata?.batchRootId);
+    // 画布图片节点按显示设备像素判定：世界尺寸 × viewport.k × devicePixelRatio 超过缩略图长边时改用原图。
+    const imageSrc = useImageThumbnailSrc(node.metadata?.storageKey, node.metadata?.content, { width: node.width, height: node.height, scaleRef });
 
     return (
         <BatchFrame batchCount={isBatchRoot ? batchCount : 0} batchExpanded={batchExpanded} batchOpening={batchOpening} batchRecovering={batchRecovering} onToggleBatch={onToggleBatch}>
             <div className="h-full w-full overflow-hidden rounded-3xl">
                 {media ?? (
                     <img
-                        src={node.metadata!.content!}
+                        src={imageSrc || undefined}
                         alt={node.title}
                         draggable={false}
                         loading="lazy"

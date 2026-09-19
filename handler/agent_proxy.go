@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -12,13 +13,18 @@ import (
 // 使浏览器同源访问画布能力而无需接触 token。默认目标 http://agent:17371（docker-compose 网络）。
 var agentProxy *httputil.ReverseProxy
 
+// defaultAgentProxyURL 是 docker compose 网络内 agent 服务的默认地址。
+const defaultAgentProxyURL = "http://agent:17371"
+
 func init() {
 	target := os.Getenv("AGENT_PROXY_URL")
 	if target == "" {
-		target = "http://agent:17371"
+		target = defaultAgentProxyURL
+		log.Printf("[Agent 反代] 警告：未配置 AGENT_PROXY_URL，按默认地址 %s 转发；若 agent 不在同一个 docker compose 网络内，请在 .env 里设置 AGENT_PROXY_URL，否则 /api/agent/health 会返回 502。", defaultAgentProxyURL)
 	}
 	parsed, err := url.Parse(target)
 	if err != nil {
+		log.Printf("[Agent 反代] 警告：AGENT_PROXY_URL 不是合法地址（%s），/api/agent/* 反代不可用，浏览器会提示网络或跨域失败。正确示例：%s", target, defaultAgentProxyURL)
 		return
 	}
 	agentProxy = &httputil.ReverseProxy{
@@ -35,6 +41,9 @@ func init() {
 		},
 	}
 	agentToken := os.Getenv("AGENT_TOKEN")
+	if agentToken == "" {
+		log.Printf("[Agent 反代] 警告：未配置 AGENT_TOKEN，反代不会注入 x-canvas-agent-token；此时 /api/agent/health 可能仍返回 ok，但 /events、/canvas/* 等受保护路由会返回 401，画布表现为连接失败。请在 .env 里配置与 agent 容器完全一致的 AGENT_TOKEN（生成示例：openssl rand -hex 18）。")
+	}
 	if agentToken != "" {
 		agentProxy.ModifyResponse = nil
 		director := agentProxy.Rewrite

@@ -35,6 +35,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { useImageThumbnailSrc } from "@/hooks/use-image-thumbnail-src";
 import {
     CreativeWorkflowWorkspace,
     type WorkflowExternalTaskFailure,
@@ -129,6 +130,7 @@ const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
+
 export default function ImagePage() {
     const { message, modal } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1490,20 +1492,7 @@ function ReferenceStrip({ references, compact = false, className = "", onRemoveR
             }}
         >
             {references.map((item) => (
-                <div key={item.id} className={`${compact ? "size-12" : "size-20"} group relative shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800`}>
-                    <Image
-                        src={item.dataUrl || undefined}
-                        alt={item.name}
-                        className="size-full object-cover cursor-pointer"
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                        preview={{
-                            mask: "点击预览",
-                        }}
-                    />
-                    <button type="button" className="absolute right-1 top-1 hidden z-10 size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => onRemoveReference(item.id)} aria-label="移除参考图">
-                        <Trash2 className="size-3.5" />
-                    </button>
-                </div>
+                <ReferenceStripItem key={item.id} reference={item} compact={compact} onRemoveReference={onRemoveReference} />
             ))}
             {Array.from({ length: uploadingCount }).map((_, i) => (
                 <div key={`loading-${i}`} className={`${compact ? "size-12" : "size-20"} shrink-0 flex items-center justify-center rounded-md border border-stone-200 dark:border-stone-800 bg-stone-100/50 dark:bg-stone-900/50`}>
@@ -1515,14 +1504,41 @@ function ReferenceStrip({ references, compact = false, className = "", onRemoveR
     );
 }
 
+function ReferenceStripItem({ reference, compact, onRemoveReference }: { reference: ReferenceImage; compact: boolean; onRemoveReference: (id: string) => void }) {
+    // 条上小图用缩略图；点击预览仍走原图。
+    const thumbnailSrc = useImageThumbnailSrc(reference.storageKey, reference.dataUrl);
+    return (
+        <div className={`${compact ? "size-12" : "size-20"} group relative shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800`}>
+            <Image
+                src={thumbnailSrc || undefined}
+                alt={reference.name}
+                className="size-full object-cover cursor-pointer"
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                preview={{
+                    mask: "点击预览",
+                    src: reference.dataUrl || undefined,
+                }}
+            />
+            <button type="button" className="absolute right-1 top-1 hidden z-10 size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => onRemoveReference(reference.id)} aria-label="移除参考图">
+                <Trash2 className="size-3.5" />
+            </button>
+        </div>
+    );
+}
+
 function ReferenceQuickActions({ references, onUploadReferences }: { references: ReferenceImage[]; onUploadReferences: () => void }) {
     return (
         <div className="flex h-11 items-center gap-1 rounded-xl border border-stone-200 bg-background px-2 dark:border-stone-800">
-            {references[0] ? <img src={references[0].dataUrl || undefined} alt={references[0].name} className="size-7 rounded object-cover" /> : null}
+            {references[0] ? <ReferenceQuickThumb reference={references[0]} /> : null}
             {references.length ? <span className="min-w-7 text-xs text-stone-500">{references.length} 张</span> : null}
             <Button size="small" type="text" icon={<Upload className="size-3.5" />} onClick={onUploadReferences} />
         </div>
     );
+}
+
+function ReferenceQuickThumb({ reference }: { reference: ReferenceImage }) {
+    const thumbnailSrc = useImageThumbnailSrc(reference.storageKey, reference.dataUrl);
+    return <img src={thumbnailSrc || undefined} alt={reference.name} className="size-7 rounded object-cover" />;
 }
 
 function QuickSelect({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string }[]; onChange: (value: string) => void }) {
@@ -1759,6 +1775,24 @@ function ResultsPanel({
     );
 }
 
+function CategoryCardCoverImage({ image, index, total }: { image: GeneratedImage; index: number; total: number }) {
+    // 分类封面拼贴是列表态渲染，用缩略图。
+    const thumbnailSrc = useImageThumbnailSrc(image.storageKey, image.dataUrl);
+    return (
+        <img
+            src={thumbnailSrc || undefined}
+            alt=""
+            className={`${total === 1 ? "inset-0 size-full rounded-none border-0" : "h-[92%] w-[86%] rounded-lg border border-white/80 dark:border-stone-900"} absolute object-cover shadow-xl transition-transform duration-200 group-hover:scale-[1.02]`}
+            style={{
+                left: total === 1 ? 0 : `${3 + index * 4}%`,
+                top: total === 1 ? 0 : `${4 + index * 3}%`,
+                transform: total === 1 ? "none" : `rotate(${(index - 2) * 4}deg)`,
+                zIndex: index + 1,
+            }}
+        />
+    );
+}
+
 function CategoryCard({
     category,
     logs,
@@ -1794,18 +1828,7 @@ function CategoryCard({
                 {images.length ? (
                     <>
                         {images.map((image, index) => (
-                            <img
-                                key={`${image.id}-${index}`}
-                                src={image.dataUrl}
-                                alt=""
-                                className={`${images.length === 1 ? "inset-0 size-full rounded-none border-0" : "h-[92%] w-[86%] rounded-lg border border-white/80 dark:border-stone-900"} absolute object-cover shadow-xl transition-transform duration-200 group-hover:scale-[1.02]`}
-                                style={{
-                                    left: images.length === 1 ? 0 : `${3 + index * 4}%`,
-                                    top: images.length === 1 ? 0 : `${4 + index * 3}%`,
-                                    transform: images.length === 1 ? "none" : `rotate(${(index - 2) * 4}deg)`,
-                                    zIndex: index + 1,
-                                }}
-                            />
+                            <CategoryCardCoverImage key={`${image.id}-${index}`} image={image} index={index} total={images.length} />
                         ))}
                     </>
                 ) : (
@@ -1880,6 +1903,8 @@ function ResultImageCard({
     syncing: boolean;
     onSync: (image: GeneratedImage) => void;
 }) {
+    // 列表卡片用缩略图渲染；点开预览仍是原图。
+    const thumbnailSrc = useImageThumbnailSrc(image.storageKey, image.dataUrl);
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
             <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
@@ -1888,7 +1913,7 @@ function ResultImageCard({
                     <Tag className="m-0 text-[10px]" color="blue">新生成</Tag>
                 </div>
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                <Image src={thumbnailSrc || undefined} preview={{ src: image.dataUrl || undefined }} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
             </div>
             <TaskInfo result={result} onCopyPrompt={onCopyPrompt} />
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
@@ -2037,6 +2062,8 @@ function HistoryLogCard({
 }) {
     const displayImages = log.images.filter((image) => Boolean(image.dataUrl));
     const firstImage = displayImages[0];
+    // 历史列表卡片主图用缩略图；点开预览、下载、设为参考图仍走原图。
+    const firstImageSrc = useImageThumbnailSrc(firstImage?.storageKey, firstImage?.dataUrl);
     const [expanded, setExpanded] = useState(false);
     const [categoryOpen, setCategoryOpen] = useState(false);
     const [categoryName, setCategoryName] = useState("");
@@ -2079,7 +2106,7 @@ function HistoryLogCard({
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
                 {firstImage ? (
-                    <Image src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                    <Image src={firstImageSrc || undefined} preview={{ src: firstImage.dataUrl || undefined }} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
                 ) : (
                     <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500">
                         <AlertCircle className="size-7" />
@@ -2089,7 +2116,7 @@ function HistoryLogCard({
                 {displayImages.length > 1 ? (
                     <div className="absolute bottom-1.5 left-1.5 right-1.5 flex gap-1 overflow-hidden">
                         {displayImages.slice(0, 4).map((image) => (
-                            <img key={image.id} src={image.dataUrl} alt="" className="size-8 shrink-0 rounded border border-white/80 object-cover shadow-sm dark:border-stone-900/80" />
+                            <HistoryLogStripThumb key={image.id} image={image} />
                         ))}
                     </div>
                 ) : null}
@@ -2185,17 +2212,27 @@ function HistoryLogCard({
     );
 }
 
+function HistoryLogStripThumb({ image }: { image: GeneratedImage }) {
+    const thumbnailSrc = useImageThumbnailSrc(image.storageKey, image.dataUrl);
+    return <img src={thumbnailSrc || undefined} alt="" className="size-8 shrink-0 rounded border border-white/80 object-cover shadow-sm dark:border-stone-900/80" />;
+}
+
 function ReferenceThumbnailOverlay({ references, className = "" }: { references?: ReferenceImage[]; className?: string }) {
     const visibleReferences = (references || []).filter((item) => Boolean(item.dataUrl)).slice(0, 3);
     if (!visibleReferences.length) return null;
     return (
         <div className={`absolute z-10 flex items-center gap-1 rounded-md bg-black/55 p-1 shadow-sm backdrop-blur ${className}`}>
             {visibleReferences.map((item) => (
-                <img key={item.id} src={item.dataUrl} alt={item.name} className="size-7 rounded border border-white/60 object-cover" />
+                <ReferenceOverlayThumb key={item.id} reference={item} />
             ))}
             {(references || []).length > visibleReferences.length ? <span className="px-1 text-[10px] text-white">+{(references || []).length - visibleReferences.length}</span> : null}
         </div>
     );
+}
+
+function ReferenceOverlayThumb({ reference }: { reference: ReferenceImage }) {
+    const thumbnailSrc = useImageThumbnailSrc(reference.storageKey, reference.dataUrl);
+    return <img src={thumbnailSrc || undefined} alt={reference.name} className="size-7 rounded border border-white/60 object-cover" />;
 }
 
 function createPendingResult(id: string, snapshot: RequestSnapshot): GenerationResult {

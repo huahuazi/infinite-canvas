@@ -5,6 +5,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: infinite-canvas
+    # .env 里的 AGENT_TOKEN / AGENT_PROXY_URL 供后端反代 /api/agent/* 使用；
+    # AGENT_TOKEN 必须与 agent 服务完全一致，否则 /events、/canvas/* 等受保护路由返回 401。
     env_file:
       - .env
     volumes:
@@ -20,9 +22,14 @@ services:
       dockerfile: Dockerfile.agent
     container_name: infinite-canvas-agent
     environment:
+      # 容器内需监听全部网卡，app 容器才能通过服务名 agent:17371 访问（不要改成 127.0.0.1）。
       - AGENT_HOST=0.0.0.0
       - PORT=17371
+      # 与 app 服务共用 .env 里的同一个 AGENT_TOKEN；留空则本服务随机生成 token，
+      # app 容器会注入空 token，表现为 /api/agent/health 正常但 /events 返回 401。
       - AGENT_TOKEN=${AGENT_TOKEN:-}
     ports:
-      - "17371:17371"
+      # 只绑定宿主机 127.0.0.1，避免 agent 服务被公网直接访问；
+      # app 容器仍走 compose 网络 agent:17371，不受该绑定影响。
+      - "127.0.0.1:17371:17371"
     restart: unless-stopped

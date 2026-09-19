@@ -22,25 +22,27 @@ infinite-canvas-agent
 
 ## 打开画布
 
-在浏览器中打开本仓库部署后的画布地址（开发环境默认 `http://localhost:3000/canvas`），并在 URL 上追加以下参数：
+在浏览器中打开本仓库部署后的画布地址（开发环境默认 `http://localhost:3000/canvas`），并把连接凭据写在 URL 的 `#` 之后（fragment）：
 
 ```text
-http://localhost:3000/canvas?agentUrl=<Local URL>&agentToken=<Connect token>
+http://localhost:3000/canvas#agent=<Local URL>&token=<Connect token>
 ```
 
 即：
 
 ```text
-http://localhost:3000/canvas?agentUrl=http://127.0.0.1:17371&agentToken=<Connect token>
+http://localhost:3000/canvas#agent=http://127.0.0.1:17371&token=<Connect token>
 ```
+
+凭据必须放在 `#` 之后：fragment 不会进入服务器访问日志、Referer 与浏览器历史；页面读入凭据后会把 fragment 从地址栏立即清除，因此刷新不会重复携带，也不会残留在用户可复制的地址里。
 
 ## 使用模式
 
-用户没有明确指定打开方式时，使用新建画布：
+画布选择模式是普通查询参数，必须写在 `#` 之前（否则会被当成 fragment 内容而失效）：
 
-- 新建画布：在画布地址上追加 `&mode=new`
-- 最近画布：`&mode=recent`
-- 自己选择：`&mode=choose`
+- 新建画布：`?mode=new#agent=<Local URL>&token=<Connect token>`
+- 最近画布：`?mode=recent#agent=<Local URL>&token=<Connect token>`
+- 自己选择：`?mode=choose#agent=<Local URL>&token=<Connect token>`
 
 ## 说明
 

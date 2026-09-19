@@ -66,13 +66,14 @@ import { isGrok2APITtsConfig } from "@/lib/grok-tts";
 import { isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "../constants";
-import { ActiveConnectionPath, ConnectionPath } from "../components/canvas-connections";
+import { ActiveConnectionPath, ConnectionPath, getConnectionGeometry } from "../components/canvas-connections";
 import { CanvasConfigComposer } from "../components/canvas-config-composer";
 import { CanvasConfigNodePanel } from "../components/canvas-config-node-panel";
 import { CanvasDirector } from "../components/canvas-director";
 import { CanvasDirectorNodePanel } from "../components/canvas-director-node-panel";
 import { CanvasAssistantPanel } from "../components/canvas-assistant-panel";
 import { LocalAgentBridge } from "../components/local-agent-bridge";
+import type { LocalAgentStatus } from "../agent/local-agent-client";
 import { CanvasBackgroundContextMenu, CanvasNodeContextMenu } from "../components/canvas-context-menu";
 import { CanvasNodeAngleDialog, type CanvasImageAngleParams } from "../components/canvas-node-angle-dialog";
 import { CanvasNodeCropDialog, type CanvasImageCropRect } from "../components/canvas-node-crop-dialog";
@@ -155,6 +156,12 @@ const VIDEO_NODE_MAX_WIDTH = 420;
 const VIDEO_NODE_MAX_HEIGHT = 420;
 const CONNECTION_HANDLE_HIT_RADIUS = 40;
 const CONNECTION_NODE_HIT_PADDING = 32;
+// 连线视口裁剪的外扩边距（世界坐标，即缩放前的画布坐标）。
+// 连线的包围盒按三次贝塞尔控制点凸包计算，已经完整覆盖曲线本身（含目标在源左侧时向外鼓出的部分），
+// 所以“不把曲线裁掉”由包围盒负责，这个边距只作预取余量：
+// 兜住容器测量值（containerRef 与 size 状态）可能存在的轻微偏差，以及描边 16px 与选中光晕的溢出。
+// 取 240 与节点裁剪用的 280 padding 同量级（默认节点尺寸 340×240 ~ 440×240），对可见区域只是小幅外扩。
+const CONNECTION_VIEWPORT_CULL_MARGIN = 240;
 // 稳定的空数组：避免每次渲染都新建引用导致 CanvasNode 的 React.memo 失效。
 const EMPTY_INPUTS: NodeGenerationInput[] = [];
 const EMPTY_MENTION_REFERENCES: ReturnType<typeof buildNodeMentionReferences> = [];
@@ -900,20 +907,49 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [screenToCanvas],
     );
 
-    const visibleNodes = useMemo(() => {
-        const padding = 280;
+    // 视口在世界坐标下的可见范围，节点与连线裁剪共用，避免每帧重复读取容器尺寸。
+    const viewportWorldBounds = useMemo(() => {
         const rect = containerRef.current?.getBoundingClientRect();
         const width = rect?.width || size.width;
         const height = rect?.height || size.height;
-        const viewLeft = -viewport.x / viewport.k - padding;
-        const viewTop = -viewport.y / viewport.k - padding;
-        const viewRight = viewLeft + width / viewport.k + padding * 2;
-        const viewBottom = viewTop + height / viewport.k + padding * 2;
+        const left = -viewport.x / viewport.k;
+        const top = -viewport.y / viewport.k;
+        return { left, top, right: left + width / viewport.k, bottom: top + height / viewport.k };
+    }, [size.height, size.width, viewport.k, viewport.x, viewport.y]);
+
+    const visibleNodes = useMemo(() => {
+        const padding = 280;
+        const viewLeft = viewportWorldBounds.left - padding;
+        const viewTop = viewportWorldBounds.top - padding;
+        const viewRight = viewportWorldBounds.right + padding;
+        const viewBottom = viewportWorldBounds.bottom + padding;
 
         return nodes.filter((node) => !isHiddenBatchChild(node, nodes, collapsingBatchIds) && node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom);
-    }, [collapsingBatchIds, nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
+    }, [collapsingBatchIds, nodes, viewportWorldBounds]);
 
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+
+    // 视口（外扩 CONNECTION_VIEWPORT_CULL_MARGIN）之外的连线不进入渲染树。
+    // 直接复用相机 viewport 与现有渲染帧：依赖 viewportWorldBounds，平移/缩放随帧更新；
+    // 依赖 nodeById，拖动节点时端点位置变化也在同一帧重新裁剪。不新增 state、订阅或 rAF。
+    const visibleConnections = useMemo(() => {
+        const viewLeft = viewportWorldBounds.left - CONNECTION_VIEWPORT_CULL_MARGIN;
+        const viewTop = viewportWorldBounds.top - CONNECTION_VIEWPORT_CULL_MARGIN;
+        const viewRight = viewportWorldBounds.right + CONNECTION_VIEWPORT_CULL_MARGIN;
+        const viewBottom = viewportWorldBounds.bottom + CONNECTION_VIEWPORT_CULL_MARGIN;
+
+        return connections.filter((connection) => {
+            const from = nodeById.get(connection.fromNodeId);
+            const to = nodeById.get(connection.toNodeId);
+            if (!from || !to) return false;
+            const { bounds } = getConnectionGeometry(from, to);
+            // 先做 O(1) 包围盒比较；只有落在裁剪范围内的候选连线才继续做隐藏批次端点判断，
+            // 该判断原本是每帧对每条连线各做一次 nodes 线性查找，现在被限制在少量可见连线上。
+            if (bounds.right < viewLeft || bounds.left > viewRight || bounds.bottom < viewTop || bounds.top > viewBottom) return false;
+            return !isHiddenBatchConnectionEndpoint(from, nodes) && !isHiddenBatchConnectionEndpoint(to, nodes);
+        });
+    }, [connections, nodeById, nodes, viewportWorldBounds]);
+
     const toolbarNode = toolbarNodeId ? nodeById.get(toolbarNodeId) || null : null;
     const infoNode = infoNodeId ? nodeById.get(infoNodeId) || null : null;
     const cropNode = cropNodeId ? nodeById.get(cropNodeId) || null : null;
@@ -1031,7 +1067,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const options = connections.flatMap((connection) => {
                 if (connection.toNodeId !== node.id) return [];
                 const imageNode = nodeById.get(connection.fromNodeId);
-                return isCanvasImageNodeType(imageNode?.type) && imageNode?.metadata?.content ? [{ nodeId: imageNode.id, label: imageNode.title || "图片节点", previewUrl: imageNode.metadata.content }] : [];
+                return isCanvasImageNodeType(imageNode?.type) && imageNode?.metadata?.content ? [{ nodeId: imageNode.id, label: imageNode.title || "图片节点", previewUrl: imageNode.metadata.content, storageKey: imageNode.metadata.storageKey }] : [];
             });
             map.set(node.id, options);
         });
@@ -1050,7 +1086,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const text = source.metadata?.content || source.metadata?.prompt || "";
                     return text.trim() ? [{ nodeId: source.id, kind: "text" as const, label, text }] : [];
                 }
-                if (isCanvasImageNodeType(source.type) && source.metadata?.content) return [{ nodeId: source.id, kind: "image" as const, label, previewUrl: source.metadata.content }];
+                if (isCanvasImageNodeType(source.type) && source.metadata?.content) return [{ nodeId: source.id, kind: "image" as const, label, previewUrl: source.metadata.content, storageKey: source.metadata.storageKey }];
                 if (source.type === CanvasNodeType.Video && source.metadata?.content) return [{ nodeId: source.id, kind: "video" as const, label, previewUrl: source.metadata.content }];
                 if (source.type === CanvasNodeType.Audio && source.metadata?.content) return [{ nodeId: source.id, kind: "audio" as const, label }];
                 return [];
@@ -1631,27 +1667,28 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         }
                     }
                     snapRef.current = { vertical: vHit, horizontal: hHit };
-                    setSnapGuides(snapRef.current);
                 }
                 const finalDx = dx + snapOffsetX;
                 const finalDy = dy + snapOffsetY;
 
-                const movedIds = new Set(initialPositions.map((item) => item.id));
-                const previewNodes = nodesRef.current.map((node) => {
-                    const initial = initialPositions.find((item) => item.id === node.id);
-                    return initial ? { ...node, position: { x: initial.x + finalDx, y: initial.y + finalDy } } : node;
-                });
-                setDropTargetGroupId(findGroupDropTarget(movedIds, previewNodes)?.id || null);
-
                 if (rafRef.current) cancelAnimationFrame(rafRef.current);
+                // 落点检测与位置写入放进同一个 rAF：吸附参考线、分组落点高亮、节点位置在同一批 setState 中提交，
+                // 一帧只渲染一次，高亮不会比节点位置慢一帧（拖动中也不再有位置之外的额外渲染批次）。
                 rafRef.current = requestAnimationFrame(() => {
+                    rafRef.current = null;
+                    const movedIds = new Set(initialPositions.map((item) => item.id));
+                    const previewNodes = nodesRef.current.map((node) => {
+                        const initial = initialPositions.find((item) => item.id === node.id);
+                        return initial ? { ...node, position: { x: initial.x + finalDx, y: initial.y + finalDy } } : node;
+                    });
+                    setDropTargetGroupId(findGroupDropTarget(movedIds, previewNodes)?.id || null);
+                    setSnapGuides(snapRef.current);
                     setNodes((prev) =>
                         prev.map((node) => {
                             const initial = initialPositions.find((item) => item.id === node.id);
                             return initial ? { ...node, position: { x: initial.x + finalDx, y: initial.y + finalDy } } : node;
                         }),
                     );
-                    rafRef.current = null;
                 });
                 return;
             }
@@ -3716,6 +3753,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [agentEffectiveConfig, currentProject?.title, projectId],
     );
 
+    /** 本地 Agent 桥上报的连接状态：页面用它把同一份状态透传给侧边栏接入面板。 */
+    const [localAgentStatus, setLocalAgentStatus] = useState<LocalAgentStatus>({ state: "idle" });
+
     /** 本地 Agent 桥使用的上下文（空创作状态）。 */
     const getLocalAgentContext = useCallback<() => unknown>(
         () =>
@@ -4565,7 +4605,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 if (selection?.toString() && panel?.contains(selection.anchorNode) && !panel.contains(event.target as Node)) selection.removeAllRanges();
             }}
         >
-            <LocalAgentBridge getContext={getLocalAgentContext} executeAction={executeCanvasAgentAction} />
+            <LocalAgentBridge getContext={getLocalAgentContext} executeAction={executeCanvasAgentAction} onStatusChange={setLocalAgentStatus} />
             <CanvasSidePanel
                 nodes={nodes}
                 selectedNodeIds={selectedNodeIds}
@@ -4632,39 +4672,33 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onDrop={handleDrop}
                 >
                     <svg className="absolute left-0 top-0 h-[10000px] w-[10000px] overflow-visible" style={{ pointerEvents: "none", transform: "translateZ(0)", zIndex: 6 }}>
-                        {connections
-                            .filter((connection) => {
-                                const from = nodeById.get(connection.fromNodeId);
-                                const to = nodeById.get(connection.toNodeId);
-                                return Boolean(from && to && !isHiddenBatchConnectionEndpoint(from, nodes) && !isHiddenBatchConnectionEndpoint(to, nodes));
-                            })
-                            .map((connection) => {
-                                const from = nodeById.get(connection.fromNodeId);
-                                const to = nodeById.get(connection.toNodeId);
-                                if (!from || !to) return null;
+                        {visibleConnections.map((connection) => {
+                            const from = nodeById.get(connection.fromNodeId);
+                            const to = nodeById.get(connection.toNodeId);
+                            if (!from || !to) return null;
 
-                                return (
-                                    <ConnectionPath
-                                        key={connection.id}
-                                        connection={connection}
-                                        from={from}
-                                        to={to}
-                                        active={selectedConnectionId === connection.id || relatedHighlight.connectionIds.has(connection.id)}
-                                        onSelect={() => {
-                                            setSelectedConnectionId(connection.id);
-                                            setSelectedNodeIds(new Set());
-                                            setToolbarNodeId(null);
-                                            setContextMenu(null);
-                                        }}
-                                        onContextMenu={(event) => {
-                                            setSelectedConnectionId(connection.id);
-                                            setSelectedNodeIds(new Set());
-                                            setToolbarNodeId(null);
-                                            setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId: connection.id });
-                                        }}
-                                    />
-                                );
-                            })}
+                            return (
+                                <ConnectionPath
+                                    key={connection.id}
+                                    connection={connection}
+                                    from={from}
+                                    to={to}
+                                    active={selectedConnectionId === connection.id || relatedHighlight.connectionIds.has(connection.id)}
+                                    onSelect={() => {
+                                        setSelectedConnectionId(connection.id);
+                                        setSelectedNodeIds(new Set());
+                                        setToolbarNodeId(null);
+                                        setContextMenu(null);
+                                    }}
+                                    onContextMenu={(event) => {
+                                        setSelectedConnectionId(connection.id);
+                                        setSelectedNodeIds(new Set());
+                                        setToolbarNodeId(null);
+                                        setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId: connection.id });
+                                    }}
+                                />
+                            );
+                        })}
                         {connectingParams ? <ActiveConnectionPath node={nodeById.get(connectingParams.nodeId)} handle={connectingParams} mouseWorld={mouseWorld} target={connectionTargetNodeId ? nodeById.get(connectionTargetNodeId) : undefined} /> : null}
                     </svg>
 
@@ -5089,6 +5123,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     }}
                     getAgentContext={getCanvasAgentContext}
                     onExecuteAction={executeCanvasAgentAction}
+                    agentStatus={localAgentStatus}
+                    agentConnectionMode={localAgentStatus.mode === "direct" ? "local" : localAgentStatus.mode === "hosted" ? "hosted" : null}
                     onCollapseStart={() => setAgentPanel((current) => ({ ...current, open: false }))}
                     onCollapse={() => setAssistantMounted(false)}
                     initialRequest={initialAgentRequest}

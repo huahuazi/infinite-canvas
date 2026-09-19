@@ -1,9 +1,7 @@
 "use client";
 
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import {
-    Check,
     ChevronDown,
     Copy,
     History,
@@ -23,15 +21,18 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ImageGenerationPending } from "@/components/image-generation-pending";
+import { useCopyText } from "@/hooks/use-copy-text";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
 import { imageToDataUrl } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { AGENT_FAILURE_INFO, currentOrigin, resolveLocalAgentStartCommand, resolveMcpCommands, type AgentConnectionMode } from "../agent/agent-connect-params";
 import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
 import type { CanvasAgentContext } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
+import { probeHostedAgent, type LocalAgentStatus } from "../agent/local-agent-client";
 import {
     CanvasNodeType,
     type CanvasAgentConfig,
@@ -47,6 +48,7 @@ import { CanvasPromptChipInput } from "./canvas-prompt-chip-input";
 
 const PANEL_MOTION_MS = 500;
 const PANEL_MOTION_SECONDS = PANEL_MOTION_MS / 1000;
+const IDLE_AGENT_STATUS: LocalAgentStatus = { state: "idle" };
 
 type CanvasAssistantPanelProps = {
     nodes: CanvasNodeData[];
@@ -66,6 +68,9 @@ type CanvasAssistantPanelProps = {
     onExecuteAction: (action: CanvasAgentAction, messageReferenceNodeIds: string[]) => Promise<CanvasAgentToolResult>;
     onCollapseStart: () => void;
     onCollapse: () => void;
+    /** 接入面板展示用：当前生效的接入形态与连接状态；未接入时由面板自行探测。 */
+    agentConnectionMode?: AgentConnectionMode | null;
+    agentStatus?: LocalAgentStatus;
     initialRequest?: { prompt: string; references: CanvasAssistantReference[] } | null;
     onInitialRequestConsumed?: () => void;
 };
@@ -93,10 +98,25 @@ export function CanvasAssistantPanel({
     onExecuteAction,
     onCollapseStart,
     onCollapse,
+    agentConnectionMode: agentConnectionModeProp,
+    agentStatus: agentStatusProp,
     initialRequest,
     onInitialRequestConsumed,
 }: CanvasAssistantPanelProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    // 接入面板自行探测站点是否托管 Agent，据此决定展示托管还是本地接入命令。
+    const [hostedAgent, setHostedAgent] = useState<boolean | null>(null);
+    useEffect(() => {
+        let cancelled = false;
+        void probeHostedAgent().then((result) => {
+            if (!cancelled) setHostedAgent(result.status === "available");
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+    const agentStatus = agentStatusProp ?? IDLE_AGENT_STATUS;
+    const connectionMode = agentConnectionModeProp ?? (agentStatus.mode === "direct" ? "local" : agentStatus.mode === "hosted" ? "hosted" : hostedAgent ? "hosted" : "local");
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const cleanupImages = useAssetStore((state) => state.cleanupImages);
@@ -425,7 +445,7 @@ export function CanvasAssistantPanel({
                     </div>
                 </div>
 
-                <LocalAgentHint />
+                <LocalAgentConnect mode={connectionMode} status={agentStatus} />
 
                 <div ref={messageListRef} className="thin-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
                     {view === "history" ? (
@@ -522,39 +542,41 @@ export function CanvasAssistantPanel({
     );
 }
 
-/** 本地 Agent 连接引导提示条：读取 URL 参数展示连接状态，并提供示例链接拷贝。 */
-function LocalAgentHint() {
+/** 接入面板：按当前部署形态给出可复制的 MCP 注册命令，并在连接失败时区分原因与下一步动作。 */
+function LocalAgentConnect({ mode, status }: { mode: AgentConnectionMode | null; status: LocalAgentStatus }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const searchParams = useSearchParams();
+    const copyText = useCopyText();
     const [collapsed, setCollapsed] = useState(false);
-    const [copied, setCopied] = useState(false);
+    const [url, setUrl] = useState("");
+    const [token, setToken] = useState("");
 
-    const isConnected = Boolean(searchParams.get("agentUrl") && searchParams.get("agentToken"));
-    const queryExample = "?agentUrl=<Local URL>&agentToken=<Connect token>";
+    const isConnected = status.state === "connected";
+    const isLocal = mode === "local";
+    const commands = useMemo(() => resolveMcpCommands(isLocal ? "local" : "hosted"), [isLocal]);
+    const startCommand = useMemo(() => (isLocal ? resolveLocalAgentStartCommand() : "docker compose up -d agent"), [isLocal]);
+    const failure = status.state === "error" && status.reason ? AGENT_FAILURE_INFO[status.reason] : null;
+    const title = isConnected ? (status.mode === "direct" ? "已直连 Agent 服务" : "已接入站点托管 Agent") : isLocal ? "本地 Agent 模式" : "服务器托管 Agent 模式";
+    const modeHint = isConnected
+        ? isLocal
+            ? "本机 Agent 服务已连上画布，Codex / Claude Code 等可直接通过 MCP 操作本画布。"
+            : "站点同源托管的 Agent 已连上画布，Codex / Claude Code 等直接用下面的 http 命令即可接入。"
+        : isLocal
+          ? "先在本机启动 Agent 服务，再执行下面的命令把画布注册给 Codex / Claude Code。"
+          : "Agent 由站点同源托管，执行下面的命令即可让 Codex / Claude Code 连上本画布，无需任何 token。";
+    const credentialInputStyle = { background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text };
 
-    const copyExampleLink = async () => {
-        const base = `${window.location.origin}${window.location.pathname}`;
-        const text = `${base}${queryExample}`;
-        try {
-            if (navigator.clipboard?.writeText) {
-                await navigator.clipboard.writeText(text);
-            } else {
-                // 非安全上下文（http 部署）下 clipboard API 不可用，降级为旧式复制。
-                const textarea = document.createElement("textarea");
-                textarea.value = text;
-                textarea.style.position = "fixed";
-                textarea.style.opacity = "0";
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand("copy");
-                document.body.removeChild(textarea);
-            }
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 2000);
-        } catch {
-            // 复制仍受限时提示用户手动复制
-            window.prompt("请手动复制示例链接：", text);
-        }
+    const connect = () => {
+        const raw = url.trim();
+        const nextToken = token.trim();
+        if (!raw || !nextToken) return;
+        const address = /^https?:\/\//i.test(raw) ? raw : "http://" + raw;
+        const target = new URL(window.location.href.split("#")[0]);
+        target.hash = "agent=" + encodeURIComponent(address) + "&token=" + encodeURIComponent(nextToken);
+        window.location.assign(target.toString());
+    };
+    const copyLink = () => {
+        const link = window.location.href.split("#")[0] + "#agent=" + encodeURIComponent(url.trim()) + "&token=" + encodeURIComponent(token.trim());
+        copyText(link, "已复制带凭据链接：打开后自动接入并立即清除凭据");
     };
 
     return (
@@ -562,48 +584,114 @@ function LocalAgentHint() {
             <div className="rounded-xl border px-3 py-2.5" style={{ background: theme.node.fill, borderColor: theme.node.stroke }}>
                 <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
-                        <span className="inline-block size-2 shrink-0 rounded-full" style={{ background: isConnected ? "#22c55e" : theme.node.muted }} />
-                        <span className="truncate">{isConnected ? "已连接本地 Agent" : "本地 Agent 模式"}</span>
+                        <span className="inline-block size-2 shrink-0 rounded-full" style={{ background: isConnected ? theme.node.activeStroke : theme.node.faint }} />
+                        <span className="truncate">
+                            {title}
+                            {status.state === "connecting" ? "（正在接入…）" : ""}
+                        </span>
                     </div>
                     <button
                         type="button"
-                        className="shrink-0 transition-transform"
+                        className="shrink-0 cursor-pointer border-0 bg-transparent"
                         style={{ color: theme.node.muted }}
                         aria-expanded={!collapsed}
-                        aria-label={collapsed ? "展开本地 Agent 引导" : "折叠本地 Agent 引导"}
+                        aria-label={collapsed ? "展开 Agent 接入面板" : "折叠 Agent 接入面板"}
                         onClick={() => setCollapsed((value) => !value)}
                     >
                         <ChevronDown className={cn("size-4 transition-transform", collapsed ? "" : "rotate-180")} />
                     </button>
                 </div>
+
                 {!collapsed ? (
-                    <div className="mt-2 space-y-2 text-xs leading-5" style={{ color: theme.node.text }}>
-                        {isConnected ? (
-                            <p className="opacity-70">Codex / Claude Code 等 Agent 已通过 MCP 接入，可直接在本画布执行操作。</p>
-                        ) : (
-                            <>
-                                <p className="opacity-80">
-                                    在终端运行{" "}
-                                    <code className="rounded px-1 py-0.5 font-mono text-[0.85em]" style={{ background: theme.toolbar.itemHover }}>
-                                        infinite-canvas-agent
-                                    </code>
-                                    ，复制输出的 Local URL 与 Connect token，然后访问画布链接并追加{" "}
-                                    <code className="rounded px-1 py-0.5 font-mono text-[0.85em]" style={{ background: theme.toolbar.itemHover }}>
-                                        {queryExample}
-                                    </code>
-                                    ，即可让 Codex / Claude Code 等 Agent 通过 MCP 操作本画布。本地 Agent 默认监听 127.0.0.1:17371，token 也会写入 ~/.infinite-canvas/canvas-agent.json。
-                                </p>
+                    <div className="mt-2 space-y-2.5 text-xs leading-5" style={{ color: theme.node.text }}>
+                        <p className="opacity-75">{modeHint}</p>
+
+                        {failure ? (
+                            <div className="overflow-hidden rounded-lg border" style={{ borderColor: theme.node.stroke }}>
+                                <div className="border-b px-2.5 py-1.5 font-medium" style={{ borderColor: theme.node.stroke, background: theme.toolbar.itemHover }}>
+                                    {failure.title}
+                                </div>
+                                <div className="space-y-1 px-2.5 py-2">
+                                    <p className="opacity-80">{failure.detail}</p>
+                                    <p className="opacity-80">下一步：{failure.nextStep}</p>
+                                </div>
+                            </div>
+                        ) : null}
+
+                        <div className="space-y-1.5">
+                            <div className="font-medium opacity-80">{isLocal ? "① 在本机启动 Agent 服务" : "① 确认站点托管的 Agent 在运行"}</div>
+                            <code className="block overflow-x-auto rounded px-1.5 py-1 font-mono text-[0.85em]" style={{ background: theme.toolbar.itemHover }}>
+                                {startCommand}
+                            </code>
+                            <div className="font-medium opacity-80">② 注册 MCP：复制下面命令直接粘到终端</div>
+                            {commands.map((item) => (
+                                <div key={item.agent} className="space-y-1">
+                                    <div className="flex items-start gap-1.5">
+                                        <code className="min-w-0 flex-1 overflow-x-auto rounded px-1.5 py-1 font-mono text-[0.85em]" style={{ background: theme.toolbar.itemHover }}>
+                                            {item.command}
+                                        </code>
+                                        <button
+                                            type="button"
+                                            className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border-0 px-1.5 py-1"
+                                            style={{ background: theme.toolbar.itemHover, color: theme.node.text }}
+                                            onClick={() => copyText(item.command, "已复制 " + item.agent + " 的 MCP 注册命令")}
+                                        >
+                                            <Copy className="size-3.5" />
+                                            {item.agent}
+                                        </button>
+                                    </div>
+                                    {item.hint ? <p className="opacity-60">{item.hint}</p> : null}
+                                </div>
+                            ))}
+                            <p className="opacity-60">
+                                {isLocal
+                                    ? "本地 Agent 默认监听 127.0.0.1:17371，token 写在 ~/.infinite-canvas/canvas-agent.json；命令在仓库目录里执行，$(git rev-parse --show-toplevel) 会展开成仓库绝对路径，不需要先 npm link。"
+                                    : "MCP 地址取当前站点 " + currentOrigin() + "，由后端同源反代到 agent 容器。"}
+                            </p>
+                        </div>
+
+                        <div className="space-y-1.5 border-t pt-2" style={{ borderColor: theme.node.stroke }}>
+                            <div className="font-medium opacity-80">在浏览器里手动直连本机 Agent</div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                                <input
+                                    value={url}
+                                    onChange={(event) => setUrl(event.target.value)}
+                                    placeholder="http://127.0.0.1:17371"
+                                    aria-label="Agent 服务地址"
+                                    className="min-w-0 flex-1 rounded-md border px-2 py-1 text-xs outline-none"
+                                    style={credentialInputStyle}
+                                />
+                                <input
+                                    value={token}
+                                    onChange={(event) => setToken(event.target.value)}
+                                    placeholder="Connect token"
+                                    aria-label="连接 token"
+                                    className="min-w-0 flex-1 rounded-md border px-2 py-1 text-xs outline-none"
+                                    style={credentialInputStyle}
+                                />
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
                                 <button
                                     type="button"
-                                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 transition"
-                                    style={{ background: theme.toolbar.itemHover, color: theme.node.text }}
-                                    onClick={copyExampleLink}
+                                    className="cursor-pointer rounded-md border-0 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                                    style={{ background: theme.toolbar.activeBg, color: theme.toolbar.activeText }}
+                                    disabled={!url.trim() || !token.trim()}
+                                    onClick={connect}
                                 >
-                                    {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                                    {copied ? "已复制" : "拷贝示例链接"}
+                                    {isConnected && status.mode === "direct" ? "重新连接" : "连接本机 Agent"}
                                 </button>
-                            </>
-                        )}
+                                <button
+                                    type="button"
+                                    className="cursor-pointer rounded-md border-0 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                                    style={{ background: theme.toolbar.itemHover, color: theme.node.text }}
+                                    disabled={!url.trim() || !token.trim()}
+                                    onClick={copyLink}
+                                >
+                                    复制带凭据链接
+                                </button>
+                            </div>
+                            <p className="opacity-60">凭据只写进地址栏 #fragment，页面读入后立即清除，不会进入 query、访问日志与 Referer。</p>
+                        </div>
                     </div>
                 ) : null}
             </div>

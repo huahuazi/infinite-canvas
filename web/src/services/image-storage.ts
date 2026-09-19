@@ -3,6 +3,7 @@
 import localforage from "localforage";
 
 import { nanoid } from "nanoid";
+import { createImageThumbnail } from "@/lib/image-thumbnail";
 import { readImageMeta } from "@/lib/image-utils";
 import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
 import { apiGet } from "@/services/api/request";
@@ -53,7 +54,10 @@ export type StorageConfig = {
 };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
+const thumbnailStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_thumbnails" });
 const objectUrls = new Map<string, string>();
+const thumbnailUrls = new Map<string, string>();
+const THUMBNAIL_KEY_PREFIX = "thumbnail:";
 const serverUrls = new Map<string, string>();
 export const USER_STORAGE_PROVIDER_KEY = "infinite-canvas:user_storage_provider";
 export const USER_WEBDAV_STORAGE_PROVIDER_KEY = "infinite-canvas:user_webdav_storage_provider";
@@ -146,7 +150,7 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
     const urlObj = URL.createObjectURL(blob);
     objectUrls.set(storageKey, urlObj);
     const meta = await readImageMeta(urlObj);
-    return { url: urlObj, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
+    return attachThumbnail({ url: urlObj, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType }, blob);
 }
 
 export async function uploadRemoteImageToServer(url: string, filename: string): Promise<UploadedImage> {
@@ -177,7 +181,7 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
     if (!uploadResponse.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "服务端图片上传失败");
     const meta = await readImageMeta(payload.data.url);
     if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
-    return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
+    return attachThumbnail({ ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size }, blob);
 }
 
 export function clearStorageConfigCache() {
@@ -232,6 +236,52 @@ async function resolveLocalImageUrl(storageKey: string) {
     return url;
 }
 
+function thumbnailKey(storageKey: string) {
+    return `${THUMBNAIL_KEY_PREFIX}${storageKey}`;
+}
+
+export async function resolveThumbnailUrl(storageKey: string, fallback = "") {
+    const key = thumbnailKey(storageKey);
+    const cached = thumbnailUrls.get(key);
+    if (cached) return cached;
+    const blob = await thumbnailStore.getItem<Blob>(key).catch(() => null);
+    if (!blob) return fallback;
+    const url = URL.createObjectURL(blob);
+    thumbnailUrls.set(key, url);
+    return url;
+}
+
+/**
+ * 生成并持久化展示用缩略图。只写 image_thumbnails，不改动原图与上传返回结构；
+ * 生成失败（环境不支持 WebP、解码失败等）静默跳过，由读取方回退原图。
+ */
+async function saveImageThumbnail(storageKey: string, blob: Blob): Promise<void> {
+    try {
+        const thumbnail = await createImageThumbnail(blob);
+        if (!thumbnail) return;
+        const key = thumbnailKey(storageKey);
+        await thumbnailStore.setItem(key, thumbnail);
+        const previous = thumbnailUrls.get(key);
+        if (previous) URL.revokeObjectURL(previous);
+        thumbnailUrls.set(key, URL.createObjectURL(thumbnail));
+    } catch {
+        // 缩略图只是展示优化，失败不影响原图保存。
+    }
+}
+
+async function attachThumbnail(image: UploadedImage, blob: Blob): Promise<UploadedImage> {
+    await saveImageThumbnail(image.storageKey, blob);
+    return image;
+}
+
+async function removeImageThumbnail(storageKey: string) {
+    const key = thumbnailKey(storageKey);
+    const url = thumbnailUrls.get(key);
+    if (url) URL.revokeObjectURL(url);
+    thumbnailUrls.delete(key);
+    await thumbnailStore.removeItem(key).catch(() => undefined);
+}
+
 async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | null> {
     const config = await loadStorageConfig().catch(() => null);
     const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
@@ -266,7 +316,7 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
     }
     const meta = await readImageMeta(payload.data.url);
     if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
-    return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
+    return attachThumbnail({ ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size }, blob);
 }
 
 async function uploadWebDAVImageDirect(blob: Blob, filename: string, provider: UserWebDAVStorageProvider): Promise<UploadedImage | null> {
@@ -281,7 +331,7 @@ async function cacheAnonymousImage(uploaded: UploadedImage, blob: Blob) {
     objectUrls.set(uploaded.storageKey, url);
     if (uploaded.storageKey.startsWith("server:") && uploaded.url && !uploaded.url.includes("direct=1")) serverUrls.set(uploaded.storageKey.slice("server:".length), uploaded.url);
     const meta = await readImageMeta(url);
-    return { ...uploaded, url, width: uploaded.width || meta.width, height: uploaded.height || meta.height, mimeType: uploaded.mimeType || blob.type || meta.mimeType, bytes: uploaded.bytes || blob.size };
+    return attachThumbnail({ ...uploaded, url, width: uploaded.width || meta.width, height: uploaded.height || meta.height, mimeType: uploaded.mimeType || blob.type || meta.mimeType, bytes: uploaded.bytes || blob.size }, blob);
 }
 
 export async function loadStorageConfig() {
@@ -352,6 +402,7 @@ export async function deleteStoredImages(keys: Iterable<string>) {
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
             if (assetKeys.has(key)) return;
+            await removeImageThumbnail(key);
             if (key.startsWith("server:")) {
                 await deleteServerImage(key);
                 return;
@@ -370,6 +421,11 @@ export async function cleanupUnusedImages(usedData: unknown) {
     await store.iterate((_value, key) => {
         if (!usedKeys.has(key)) unused.push(key);
     });
+    const unusedThumbnails: string[] = [];
+    await thumbnailStore.iterate((_value, key) => {
+        if (!usedKeys.has(key.slice(THUMBNAIL_KEY_PREFIX.length))) unusedThumbnails.push(key);
+    });
+    await Promise.all(unusedThumbnails.map((key) => removeImageThumbnail(key.slice(THUMBNAIL_KEY_PREFIX.length))));
     await deleteStoredImages(unused);
 }
 

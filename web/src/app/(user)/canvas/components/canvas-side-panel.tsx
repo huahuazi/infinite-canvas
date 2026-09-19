@@ -19,6 +19,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData } from "../types";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import type { InsertAssetPayload } from "./asset-picker-modal";
+import { useImageThumbnailSrc } from "@/hooks/use-image-thumbnail-src";
 
 export const CANVAS_ASSET_DRAG_TYPE = "application/x-infinite-canvas-asset";
 
@@ -174,6 +175,27 @@ function PanelTabButton({ label, active, theme, onClick }: { label: string; acti
     );
 }
 
+function CanvasNodeListRow({ node, active, theme, registerRef, onFocusNode }: { node: CanvasNodeData; active: boolean; theme: CanvasTheme; registerRef: (element: HTMLButtonElement | null) => void; onFocusNode: (nodeId: string) => void }) {
+    const Icon = NODE_TYPE_ICON[node.type] || FileText;
+    const hasImage = isCanvasImageNodeType(node.type) && node.metadata?.content;
+    // 列表缩略图：有 storageKey 才解析缩略图，缺失时回退原图内容。
+    const imageSrc = useImageThumbnailSrc(hasImage ? node.metadata?.storageKey : undefined, node.metadata?.content);
+    return (
+        <div className={cn("flex w-full items-center rounded-lg transition", active ? "" : "hover:bg-black/5 dark:hover:bg-white/5")} style={active ? { background: theme.toolbar.activeBg } : undefined}>
+            <button ref={registerRef} type="button" onClick={() => onFocusNode(node.id)} className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left">
+                <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
+                    {hasImage ? <img src={imageSrc || undefined} alt={node.title} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}
+                </span>
+                <span className="min-w-0 flex-1 space-y-0.5">
+                    <span className="block truncate text-sm font-medium leading-snug">{node.title || NODE_TYPE_LABEL[node.type] || "未命名节点"}</span>
+                    <span className="block truncate text-xs leading-snug opacity-50">{node.type === CanvasNodeType.Text ? node.metadata?.content || node.metadata?.prompt || "" : NODE_TYPE_LABEL[node.type] || node.type}</span>
+                </span>
+                {node.metadata?.status && node.metadata.status !== "idle" ? <span className="size-1.5 shrink-0 rounded-full" style={{ background: STATUS_COLOR[node.metadata.status] || "transparent" }} /> : null}
+            </button>
+        </div>
+    );
+}
+
 function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, theme }: { nodes: CanvasNodeData[]; selectedNodeIds: Set<string>; onFocusNode: (nodeId: string) => void; theme: CanvasTheme }) {
     const [keyword, setKeyword] = useState("");
     const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -205,32 +227,18 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, theme }: { nodes:
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
                 {filtered.length ? (
                     <div className="space-y-1.5">
-                        {filtered.map((node) => {
-                            const Icon = NODE_TYPE_ICON[node.type] || FileText;
-                            const hasImage = isCanvasImageNodeType(node.type) && node.metadata?.content;
-                            const active = selectedNodeIds.has(node.id);
-                            return (
-                                <div key={node.id} className={cn("flex w-full items-center rounded-lg transition", active ? "" : "hover:bg-black/5 dark:hover:bg-white/5")} style={active ? { background: theme.toolbar.activeBg } : undefined}>
-                                    <button
-                                        ref={(element) => {
-                                            rowRefs.current[node.id] = element;
-                                        }}
-                                        type="button"
-                                        onClick={() => onFocusNode(node.id)}
-                                        className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left"
-                                    >
-                                        <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
-                                            {hasImage ? <img src={node.metadata?.content} alt={node.title} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}
-                                        </span>
-                                        <span className="min-w-0 flex-1 space-y-0.5">
-                                            <span className="block truncate text-sm font-medium leading-snug">{node.title || NODE_TYPE_LABEL[node.type] || "未命名节点"}</span>
-                                            <span className="block truncate text-xs leading-snug opacity-50">{node.type === CanvasNodeType.Text ? node.metadata?.content || node.metadata?.prompt || "" : NODE_TYPE_LABEL[node.type] || node.type}</span>
-                                        </span>
-                                        {node.metadata?.status && node.metadata.status !== "idle" ? <span className="size-1.5 shrink-0 rounded-full" style={{ background: STATUS_COLOR[node.metadata.status] || "transparent" }} /> : null}
-                                    </button>
-                                </div>
-                            );
-                        })}
+                        {filtered.map((node) => (
+                            <CanvasNodeListRow
+                                key={node.id}
+                                node={node}
+                                active={selectedNodeIds.has(node.id)}
+                                theme={theme}
+                                registerRef={(element) => {
+                                    rowRefs.current[node.id] = element;
+                                }}
+                                onFocusNode={onFocusNode}
+                            />
+                        ))}
                     </div>
                 ) : (
                     <div className="pt-16 text-center text-sm opacity-40">{nodes.length ? "无匹配节点" : "画布暂无节点"}</div>
@@ -325,14 +333,16 @@ function LibraryAssetsTab({ theme, onAssetDragStart, onAssetDragEnd }: { theme: 
 }
 
 function AssetDragCard({ asset, theme, onAssetDragStart, onAssetDragEnd }: { asset: Asset; theme: CanvasTheme; onAssetDragStart: (payload: InsertAssetPayload) => void; onAssetDragEnd: () => void }) {
-    return <DraggableAssetCard theme={theme} title={asset.title} payload={assetPayload(asset)} kind={asset.kind} imageUrl={asset.kind === "text" ? asset.coverUrl : asset.kind === "image" ? asset.coverUrl || asset.data.dataUrl : asset.kind === "video" ? asset.coverUrl || asset.data.url : ""} text={asset.kind === "text" ? asset.data.content : ""} onAssetDragStart={onAssetDragStart} onAssetDragEnd={onAssetDragEnd} />;
+    return <DraggableAssetCard theme={theme} title={asset.title} payload={assetPayload(asset)} kind={asset.kind} storageKey={asset.kind === "image" ? asset.data.storageKey : undefined} imageUrl={asset.kind === "text" ? asset.coverUrl : asset.kind === "image" ? asset.coverUrl || asset.data.dataUrl : asset.kind === "video" ? asset.coverUrl || asset.data.url : ""} text={asset.kind === "text" ? asset.data.content : ""} onAssetDragStart={onAssetDragStart} onAssetDragEnd={onAssetDragEnd} />;
 }
 
 function LibraryAssetDragCard({ asset, theme, onAssetDragStart, onAssetDragEnd }: { asset: AssetLibraryItem; theme: CanvasTheme; onAssetDragStart: (payload: InsertAssetPayload) => void; onAssetDragEnd: () => void }) {
     return <DraggableAssetCard theme={theme} title={asset.title} payload={libraryPayload(asset)} kind={asset.type} imageUrl={asset.coverUrl || asset.url} text={asset.content || asset.description} onAssetDragStart={onAssetDragStart} onAssetDragEnd={onAssetDragEnd} />;
 }
 
-function DraggableAssetCard({ theme, title, payload, kind, imageUrl, text, onAssetDragStart, onAssetDragEnd }: { theme: CanvasTheme; title: string; payload: InsertAssetPayload; kind: "text" | "image" | "video" | "audio"; imageUrl: string; text: string; onAssetDragStart: (payload: InsertAssetPayload) => void; onAssetDragEnd: () => void }) {
+function DraggableAssetCard({ theme, title, payload, kind, storageKey, imageUrl, text, onAssetDragStart, onAssetDragEnd }: { theme: CanvasTheme; title: string; payload: InsertAssetPayload; kind: "text" | "image" | "video" | "audio"; storageKey?: string; imageUrl: string; text: string; onAssetDragStart: (payload: InsertAssetPayload) => void; onAssetDragEnd: () => void }) {
+    // 列表卡片封面用缩略图；拖拽落地与插入仍用原图（payload 里的 storageKey/dataUrl 未改）。
+    const thumbnailSrc = useImageThumbnailSrc(kind === "image" ? storageKey : undefined, imageUrl);
     return (
         <div
             draggable
@@ -346,7 +356,7 @@ function DraggableAssetCard({ theme, title, payload, kind, imageUrl, text, onAss
             className="group relative aspect-square cursor-grab overflow-hidden rounded-xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg active:cursor-grabbing"
             style={{ borderColor: theme.node.stroke, background: theme.node.panel }}
         >
-            {kind === "text" ? imageUrl ? <div className="flex size-full flex-col"><img src={imageUrl} alt={title} className="h-1/2 w-full object-cover" /><div className="h-1/2 overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{text}</div></div> : <div className="size-full overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{text}</div> : kind === "audio" ? <span className="grid size-full place-items-center"><Music2 className="size-8 opacity-45" /></span> : imageUrl ? kind === "video" ? <video src={imageUrl + "#t=0.1"} muted playsInline preload="metadata" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" /> : <img src={imageUrl} alt={title} className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" /> : <span className="grid size-full place-items-center"><FileText className="size-8 opacity-45" /></span>}
+            {kind === "text" ? imageUrl ? <div className="flex size-full flex-col"><img src={imageUrl} alt={title} className="h-1/2 w-full object-cover" /><div className="h-1/2 overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{text}</div></div> : <div className="size-full overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{text}</div> : kind === "audio" ? <span className="grid size-full place-items-center"><Music2 className="size-8 opacity-45" /></span> : imageUrl ? kind === "video" ? <video src={imageUrl + "#t=0.1"} muted playsInline preload="metadata" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" /> : <img src={thumbnailSrc || undefined} alt={title} className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" /> : <span className="grid size-full place-items-center"><FileText className="size-8 opacity-45" /></span>}
         </div>
     );
 }
