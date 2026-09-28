@@ -206,6 +206,15 @@ function isTextLikeModel(model: string) {
 }
 
 /**
+ * 在当前渠道模式下，找出真正提供这个模型的渠道 id。
+ * 找不到时返回空串 —— 后端会按模型自动挑渠道，比塞一个对不上的 id 更安全。
+ */
+function channelIdServingModel(config: AiConfig, model: string) {
+    const channels = config.channelMode === "remote" ? config.publicChannels || [] : config.localChannels || [];
+    return channels.find((channel) => (channel.models || []).includes(model))?.id || "";
+}
+
+/**
  * 挑一个「能用来优化提示词」的文字模型配置。
  *
  * 优先用生效配置里的文字模型；生效配置没有时（典型场景：登录后走远程模式，但后台
@@ -215,7 +224,11 @@ function isTextLikeModel(model: string) {
 export function resolvePromptOptimizeConfig(effective: AiConfig, raw: AiConfig): AiConfig | null {
     const textModel = effective.textModel || effective.textModels?.[0] || "";
     if (textModel) {
-        return { ...effective, model: textModel, activeChannelId: effective.textChannelId || effective.activeChannelId };
+        // 渠道必须跟着文字模型一起解析。只换 model 不换渠道的话，配置里残留的 textChannelId
+        // （典型来源：切到云端渠道之前选的本地渠道 id）会被原样当成 X-Model-Channel-ID 发出去，
+        // 后端按模型筛出的渠道里没有这个 id，直接报「指定模型渠道不可用」。
+        const channelId = channelIdServingModel(effective, textModel);
+        return { ...effective, model: textModel, textModel, textChannelId: channelId, activeChannelId: channelId || effective.activeChannelId };
     }
 
     const channels = raw.localChannels || [];

@@ -10,7 +10,16 @@ import { EditorView } from "@uiw/react-codemirror";
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import { arkChannelTips, flatkeyChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
+import { useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+
+// 后台改完渠道 / 模型后必须立刻把前端 store 里的公开设置重新拉一次。
+// loadPublicSettings 只在整页加载时跑一次，而「画布 / 视频创作台」的模型选择器读的是
+// store 里的 publicChannels：不刷新的话，新加的模型要等用户手动硬刷新页面才出现
+// （表现为「后台读取模型成功，但生成视频里选不到这个模型」）。
+function refreshPublicSettings() {
+    void useConfigStore.getState().loadPublicSettings();
+}
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
 const jsonEditorTheme = EditorView.theme({
@@ -132,6 +141,7 @@ export default function AdminSettingsPage() {
                 private: JSON.stringify(merged.private, null, 2),
             });
             message.success("已保存");
+            refreshPublicSettings();
         } catch (error) {
             message.error(error instanceof Error ? error.message : "保存失败");
         } finally {
@@ -295,6 +305,7 @@ export default function AdminSettingsPage() {
             private: JSON.stringify(merged.private, null, 2),
         });
         message.success("已保存");
+        refreshPublicSettings();
     }
 
     async function measureStorageProviderAt(index: number) {

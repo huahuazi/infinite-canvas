@@ -57,6 +57,7 @@ export function AppConfigModal() {
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
     const publicSettings = useConfigStore((state) => state.publicSettings);
+    const loadPublicSettings = useConfigStore((state) => state.loadPublicSettings);
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
     const effectiveConfig = useEffectiveConfig();
@@ -111,6 +112,9 @@ export function AppConfigModal() {
 
     useEffect(() => {
         if (!isConfigOpen) return;
+        // 打开配置时顺带刷新一次云端渠道：后台加完渠道 / 模型后，前端 store 里的
+        // publicSettings 还停在整页加载时的快照，不刷新会看不到新模型。
+        void loadPublicSettings();
         let canceled = false;
         void loadStorageConfig()
             .then((storage) => {
@@ -122,7 +126,7 @@ export function AppConfigModal() {
         return () => {
             canceled = true;
         };
-    }, [isConfigOpen]);
+    }, [isConfigOpen, loadPublicSettings]);
 
     const finishConfig = async () => {
         const localIncomplete = effectiveMode === "local" && normalizeLocalChannels(config).some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim());

@@ -538,15 +538,22 @@ export function channelIdForActiveModel(config: AiConfig) {
         const geminiChannel = channels.find((channel) => channel.protocol === "gemini" && (channel.models || []).includes(config.model));
         if (geminiChannel) return geminiChannel.id || "";
     }
-    if (modelMatchesCapability(config.model, "image") && config.imageChannelId) return config.imageChannelId;
-    if (modelMatchesCapability(config.model, "video") && config.videoChannelId) return config.videoChannelId;
-    if (modelMatchesCapability(config.model, "audio") && config.audioChannelId) return config.audioChannelId;
-    if (modelMatchesCapability(config.model, "text") && config.textChannelId) return config.textChannelId;
-    if (config.activeChannelId) return config.activeChannelId;
-    if (config.model === config.videoModel) return config.videoChannelId;
-    if (config.model === config.textModel) return config.textChannelId;
-    if (config.model === config.audioModel) return config.audioChannelId;
-    return config.imageChannelId;
+    // 候选顺序与原来一致；额外要求 id 在当前渠道列表里真实存在。
+    // 切到云端渠道模式后，配置里常残留旧的本地渠道 id（例如 local-default），原样当成
+    // X-Model-Channel-ID 发给后端会被拒成「指定模型渠道不可用」；留空反而能让后端按模型
+    // 自动挑渠道，所以这里宁可返回空串。
+    const candidates: Array<string | undefined> = [
+        modelMatchesCapability(config.model, "image") ? config.imageChannelId : "",
+        modelMatchesCapability(config.model, "video") ? config.videoChannelId : "",
+        modelMatchesCapability(config.model, "audio") ? config.audioChannelId : "",
+        modelMatchesCapability(config.model, "text") ? config.textChannelId : "",
+        config.activeChannelId,
+        config.model === config.videoModel ? config.videoChannelId : "",
+        config.model === config.textModel ? config.textChannelId : "",
+        config.model === config.audioModel ? config.audioChannelId : "",
+        config.imageChannelId,
+    ];
+    return candidates.find((id) => Boolean(id) && channels.some((channel) => channel.id === id)) || "";
 }
 
 export function localChannelForActiveModel(config: AiConfig) {
