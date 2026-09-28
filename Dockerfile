@@ -1,6 +1,12 @@
 # 构建 Next.js 前端产物。
 FROM oven/bun:1.3.14 AS web-build
 
+# 国内构建走 npmmirror：直连 registry.npmjs.org 容易在拉 next 这类大包时中断
+# （表现为 `error: Fail extracting tarball for "next"`）。需要走官方源时传
+# --build-arg BUN_REGISTRY=https://registry.npmjs.org 覆盖即可。
+ARG BUN_REGISTRY=https://registry.npmmirror.com
+ENV BUN_CONFIG_REGISTRY=$BUN_REGISTRY
+
 WORKDIR /app/web
 COPY web/package.json web/bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile --cache-dir=/root/.bun/install/cache
@@ -11,6 +17,10 @@ RUN bun run build
 
 # 构建 Go 后端入口。
 FROM golang:1.25-alpine AS api-build
+
+# 同理，Go 模块走 goproxy.cn，避免 proxy.golang.org 在国内不可达 / 超时。
+ARG GO_PROXY=https://goproxy.cn,direct
+ENV GOPROXY=$GO_PROXY
 
 WORKDIR /app
 COPY go.mod go.sum ./

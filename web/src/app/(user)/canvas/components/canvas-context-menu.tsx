@@ -95,16 +95,21 @@ export function CanvasNodeContextMenu({ menu, node, actions, onDeleteConnection,
                     {isImage || isVideo || isAudio ? <MenuButton icon={<CloudUpload className="size-4" />} label="上传到云端" onClick={() => run(() => actions.uploadCloud(node))} /> : null}
                 </>
             ) : null}
-            {isImage ? (
+            {isImage || isVideo ? (
                 <>
                     {divider}
-                    <MenuButton icon={<RefreshCw className="size-4" />} label="反转提示词" onClick={() => run(() => actions.reversePrompt(node))} />
-                    <MenuButton icon={<Crop className="size-4" />} label="裁剪" onClick={() => run(() => actions.crop(node))} />
-                    <MenuButton icon={<Scissors className="size-4" />} label="分割" onClick={() => run(() => actions.split(node))} />
-                    <MenuButton icon={<Sparkles className="size-4" />} label="元素爆炸" onClick={() => run(() => actions.explode(node))} />
-                    <MenuButton icon={<Eraser className="size-4" />} label="框选修改" onClick={() => run(() => actions.rectEdit(node))} />
-                    <MenuButton icon={<ZoomIn className="size-4" />} label="超分辨率" onClick={() => run(() => actions.upscale(node))} />
-                    <MenuButton icon={<Rotate3d className="size-4" />} label="多角度" onClick={() => run(() => actions.angle(node))} />
+                    {/* 视频节点也能反推：内部会先抽首帧建图片节点当参考图。文案原来误写成「反转提示词」，一并改回。 */}
+                    <MenuButton icon={<RefreshCw className="size-4" />} label="反推提示词" onClick={() => run(() => actions.reversePrompt(node))} />
+                    {isImage ? (
+                        <>
+                            <MenuButton icon={<Crop className="size-4" />} label="裁剪" onClick={() => run(() => actions.crop(node))} />
+                            <MenuButton icon={<Scissors className="size-4" />} label="分割" onClick={() => run(() => actions.split(node))} />
+                            <MenuButton icon={<Sparkles className="size-4" />} label="元素爆炸" onClick={() => run(() => actions.explode(node))} />
+                            <MenuButton icon={<Eraser className="size-4" />} label="框选修改" onClick={() => run(() => actions.rectEdit(node))} />
+                            <MenuButton icon={<ZoomIn className="size-4" />} label="超分辨率" onClick={() => run(() => actions.upscale(node))} />
+                            <MenuButton icon={<Rotate3d className="size-4" />} label="多角度" onClick={() => run(() => actions.angle(node))} />
+                        </>
+                    ) : null}
                 </>
             ) : null}
             {divider}

@@ -180,6 +180,15 @@ const IMAGE_PROMPT_REVERSE_PRESET = `请根据参考图片反推一段适合用�
 2. 覆盖主体、构图、风格、光线、色彩、材质、镜头和氛围。
 3. 尽量写成可直接用于生图模型的完整提示词。`;
 
+const VIDEO_PROMPT_REVERSE_PRESET = `请根据参考图片（视频首帧）反推一段适合用于 AI 生视频的提示词。
+
+要求：
+1. 只输出提示词正文，不要解释。
+2. 描述画面主体及其动作与状态，以及所处的场景环境。
+3. 说明镜头运动方式（推拉摇移、跟随、环绕、固定机位等）与景别变化。
+4. 说明光线、影调、色彩与整体风格质感，并保持画面风格统一。
+5. 尽量写成可直接用于视频生成模型的完整提示词，控制在一段话内。`;
+
 function formatPreviewTime(value: number) {
     if (!Number.isFinite(value)) return "0:00";
     const seconds = Math.floor(value);
@@ -2553,10 +2562,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [addAsset, message],
     );
 
-    const createImageReversePromptNodes = useCallback(
-        (node: CanvasNodeData) => {
-            if (!isCanvasImageNodeType(node.type) || !node.metadata?.content) {
-                message.warning("图片节点为空，无法反推提示词");
+    // 反推提示词：图片节点直接拿自己当参考图；视频节点先抽一帧建图片节点当参考图，
+    // 因为文字模型只吃图片，视频没法直接喂给它。
+    const createReversePromptNodes = useCallback(
+        async (node: CanvasNodeData) => {
+            const isImageNode = isCanvasImageNodeType(node.type) && Boolean(node.metadata?.content);
+            const isVideoNode = node.type === CanvasNodeType.Video && Boolean(node.metadata?.content);
+            if (!isImageNode && !isVideoNode) {
+                message.warning(node.type === CanvasNodeType.Video ? "视频节点为空，无法反推提示词" : "图片节点为空，无法反推提示词");
                 return;
             }
 
@@ -2564,8 +2577,39 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const textSpec = NODE_DEFAULT_SIZE[CanvasNodeType.Text];
             const configSpec = NODE_DEFAULT_SIZE[CanvasNodeType.Config];
             const centerY = node.position.y + node.height / 2;
+            const preparedNodes: CanvasNodeData[] = [];
+            const preparedConnections: CanvasConnection[] = [];
+            let preset = IMAGE_PROMPT_REVERSE_PRESET;
+            let sourceId = node.id;
+            let sourceRight = node.position.x + node.width;
+
+            if (isVideoNode) {
+                preset = VIDEO_PROMPT_REVERSE_PRESET;
+                let captured: UploadedImage;
+                try {
+                    captured = await uploadImage(await captureVideoFrame(node.metadata?.content || "", "first", 0));
+                } catch {
+                    message.error("读取视频首帧失败，无法反推提示词（跨域视频或格式不支持时请先手动截取首帧）");
+                    return;
+                }
+                const frameSize = fitNodeSize(captured.width, captured.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                const frameId = nanoid();
+                const frameNode: CanvasNodeData = {
+                    id: frameId,
+                    type: CanvasNodeType.Image,
+                    title: "视频首帧",
+                    position: { x: sourceRight + gap + frameSize.width / 2, y: centerY },
+                    ...frameSize,
+                    metadata: { ...imageMetadata(captured), prompt: node.metadata?.prompt },
+                };
+                preparedNodes.push(frameNode);
+                preparedConnections.push({ id: nanoid(), fromNodeId: node.id, toNodeId: frameId });
+                sourceId = frameId;
+                sourceRight = frameNode.position.x + frameNode.width;
+            }
+
             const textNode = {
-                ...createCanvasNode(CanvasNodeType.Text, { x: node.position.x + node.width + gap + textSpec.width / 2, y: centerY }, { content: IMAGE_PROMPT_REVERSE_PRESET, prompt: IMAGE_PROMPT_REVERSE_PRESET, status: NODE_STATUS_SUCCESS, fontSize: 14 }),
+                ...createCanvasNode(CanvasNodeType.Text, { x: sourceRight + gap + textSpec.width / 2, y: centerY }, { content: preset, prompt: preset, status: NODE_STATUS_SUCCESS, fontSize: 14 }),
                 title: "反推提示词",
             };
             const configNode = {
@@ -2576,14 +2620,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         generationMode: "text",
                         model: effectiveConfig.textModel || effectiveConfig.model || defaultConfig.textModel,
                         count: 1,
-                        composerContent: `参考图片：@[node:${node.id}]\n任务说明：@[node:${textNode.id}]`,
+                        composerContent: `参考图片：@[node:${sourceId}]\n任务说明：@[node:${textNode.id}]`,
                     },
                 ),
                 title: "反推提示词配置",
             };
 
-            setNodes((prev) => [...prev, textNode, configNode]);
-            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: configNode.id }, { id: nanoid(), fromNodeId: textNode.id, toNodeId: configNode.id }]);
+            setNodes((prev) => [...prev, ...preparedNodes, textNode, configNode]);
+            setConnections((prev) => [...prev, ...preparedConnections, { id: nanoid(), fromNodeId: sourceId, toNodeId: configNode.id }, { id: nanoid(), fromNodeId: textNode.id, toNodeId: configNode.id }]);
             setSelectedNodeIds(new Set([configNode.id]));
             setSelectedConnectionId(null);
             setDialogNodeId(configNode.id);
@@ -4848,7 +4892,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onSuperResolve={(node) => setSuperResolveNodeId(node.id)}
                     onAngle={(node) => setAngleNodeId(node.id)}
                     onViewImage={(node) => setPreviewNodeId(node.id)}
-                    onReversePrompt={createImageReversePromptNodes}
+                    onReversePrompt={createReversePromptNodes}
                     onRetry={(node) => void handleRetryNode(node)}
                     onToggleFreeResize={(node) => toggleNodeFreeResize(node.id)}
                     onDelete={(node) => deleteNodes(new Set([node.id]))}
@@ -4943,7 +4987,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             remove: (node) => deleteNodes(new Set([node.id])),
                             editText: openTextEditor,
                             generateImage: (node) => void generateImageFromTextNode(node),
-                            reversePrompt: createImageReversePromptNodes,
+                            reversePrompt: createReversePromptNodes,
                             captureFrame: (node, position) => void captureVideoNodeFrame(node.id, position),
                             crop: (node) => setCropNodeId(node.id),
                             split: (node) => setSplitNodeId(node.id),
