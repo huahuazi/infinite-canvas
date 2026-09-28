@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ArrowUp, LoaderCircle, Maximize2 } from "lucide-react";
-import { Button, Modal, Tooltip } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowUp, LoaderCircle, Maximize2, Sparkles } from "lucide-react";
+import { App, Button, Modal, Tooltip } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
 import { defaultConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -18,6 +18,7 @@ import { CanvasNodeReferenceBar } from "./canvas-node-reference-bar";
 import { CanvasVideoSettingsPopover, type CanvasVideoFrameOption, type CanvasVideoResourceOption } from "./canvas-video-settings-popover";
 import { CanvasNodeType, type CanvasGenerationMode, type CanvasNodeData, type CanvasNodeMetadata } from "../types";
 import { PANORAMA_IMAGE_SIZE, isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
+import { optimizeCanvasPrompt, resolvePromptOptimizeConfig } from "../utils/canvas-prompt-optimize";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 
 export type { CanvasVideoFrameOption };
@@ -52,7 +53,25 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const sourcePrompt = isPanorama ? node.metadata?.panoramaSourcePrompt || "" : node.metadata?.prompt || "";
     const [prompt, setPrompt] = useState(sourcePrompt);
     const [expanded, setExpanded] = useState(false);
+    const { message } = App.useApp();
+    const [optimizing, setOptimizing] = useState(false);
     const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: config.model, count: mode === "image" ? config.count : 1 });
+    const activeReferences = useMemo(() => mentionReferences.filter((reference) => reference.active), [mentionReferences]);
+    // 提示词优化固定走「文字模型 / 文字渠道」，不受当前节点生图、生视频模型的渠道影响。
+    const rawConfig = useConfigStore((state) => state.config);
+    const textConfig = useMemo(() => {
+        const resolved = resolvePromptOptimizeConfig(globalConfig, rawConfig);
+        return resolved ? { ...resolved, systemPrompt: "", systemPrompts: { ...resolved.systemPrompts, text: "" } } : null;
+    }, [globalConfig, rawConfig]);
+    const hasOptimizeInput = Boolean(prompt.trim() || activeReferences.length);
+    // 只按「有没有可用的文字模型 / 有没有可改的内容」决定禁用；优化中靠 optimizing 兜住重复点击，
+    // 这样按钮在 loading 时仍能显示转圈动画，而不是变成灰掉的禁用态。
+    const optimizeDisabled = !textConfig || !hasOptimizeInput;
+    const optimizeHint = !textConfig
+        ? "没有可用的文字模型：请先在模型配置里配置一个文字模型，才能优化提示词"
+        : activeReferences.length
+          ? `用文字大模型优化提示词（会带上 ${activeReferences.length} 项参考素材，并自动 @ 引用）`
+          : "用文字大模型优化提示词";
 
     useEffect(() => {
         setPrompt(sourcePrompt);
@@ -61,6 +80,32 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const updatePrompt = (value: string) => {
         setPrompt(value);
         onPromptChange(node.id, value);
+    };
+
+    const optimizePrompt = async () => {
+        if (!textConfig || optimizing) return;
+        setOptimizing(true);
+        try {
+            const result = await optimizeCanvasPrompt({
+                mode,
+                prompt,
+                references: mentionReferences,
+                config: textConfig,
+                settings: {
+                    model: config.model,
+                    size: mode === "video" ? config.videoSize : config.size,
+                    seconds: mode === "video" ? config.videoSeconds : undefined,
+                    count: mode === "image" ? config.count : undefined,
+                    quality: config.quality,
+                },
+            });
+            updatePrompt(result.prompt);
+            message.success(result.usedImages ? `已优化提示词（参考 ${result.usedImages} 张图）` : "已优化提示词");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "提示词优化失败");
+        } finally {
+            setOptimizing(false);
+        }
     };
 
     const canSubmit = Boolean(prompt.trim()) || (isPanorama && (hasImageContent || mentionReferences.length > 0));
@@ -128,21 +173,36 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                         <CanvasCameraControl value={node.metadata?.cameraControl} onChange={(cameraControl) => onConfigChange(node.id, { cameraControl })} buttonClassName="!h-10 !min-w-[92px] !justify-start !rounded-full !px-3" />
                     ) : null}
                 </div>
-                <Button
-                    type="primary"
-                    className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
-                    disabled={isRunning || !canSubmit}
-                    onClick={submit}
-                    aria-label="生成"
-                >
-                    <span className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
-                            <CreditSymbol />
-                            {credits.toLocaleString()}
+                <div className="flex shrink-0 items-center gap-2">
+                    <Tooltip title={optimizeHint}>
+                        <span className="inline-flex shrink-0">
+                            <Button
+                                className="!h-10 !min-w-10 !rounded-full !px-3"
+                                style={{ background: "transparent", borderColor: theme.toolbar.border, color: theme.node.text }}
+                                disabled={optimizeDisabled}
+                                loading={optimizing}
+                                onClick={optimizePrompt}
+                                aria-label="优化提示词"
+                                icon={<Sparkles className="size-4" />}
+                            />
                         </span>
-                        {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-                    </span>
-                </Button>
+                    </Tooltip>
+                    <Button
+                        type="primary"
+                        className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
+                        disabled={isRunning || !canSubmit}
+                        onClick={submit}
+                        aria-label="生成"
+                    >
+                        <span className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+                                <CreditSymbol />
+                                {credits.toLocaleString()}
+                            </span>
+                            {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+                        </span>
+                    </Button>
+                </div>
             </div>
             <Modal title="编辑提示词" open={expanded} centered width={760} footer={null} onCancel={() => setExpanded(false)} destroyOnHidden>
                 <div data-canvas-no-zoom className="pt-2" onWheelCapture={(event) => event.stopPropagation()}>

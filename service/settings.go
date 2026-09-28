@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -531,7 +532,7 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 	SetModelChannelAuthHeader(request, channel)
 	response, err := adminModelHTTPClient.Do(request)
 	if err != nil {
-		return nil, safeMessageError{message: "读取模型失败：上游接口无响应或网络不可达"}
+		return nil, upstreamRequestError(err, "读取模型失败")
 	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(response.Body)
@@ -713,7 +714,7 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	request.Header.Set("Content-Type", "application/json")
 	response, err := adminModelHTTPClient.Do(request)
 	if err != nil {
-		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
+		return "", upstreamRequestError(err, "测试失败")
 	}
 	defer response.Body.Close()
 	responseBody, _ := io.ReadAll(response.Body)
@@ -749,7 +750,7 @@ func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error)
 		SetModelChannelAuthHeader(request, channel)
 		response, err := adminModelHTTPClient.Do(request)
 		if err != nil {
-			return nil, safeMessageError{message: "读取模型失败：上游接口无响应或网络不可达"}
+			return nil, upstreamRequestError(err, "读取模型失败")
 		}
 		body, _ := io.ReadAll(response.Body)
 		response.Body.Close()
@@ -809,7 +810,7 @@ func testGeminiChannelModel(channel model.ModelChannel, modelName string) (strin
 	request.Header.Set("Content-Type", "application/json")
 	response, err := adminModelHTTPClient.Do(request)
 	if err != nil {
-		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
+		return "", upstreamRequestError(err, "测试失败")
 	}
 	defer response.Body.Close()
 	responseBody, _ := io.ReadAll(response.Body)
@@ -838,7 +839,7 @@ func testGLMTTSChannelModel(channel model.ModelChannel, modelName string) (strin
 	request.Header.Set("Content-Type", "application/json")
 	response, err := adminModelHTTPClient.Do(request)
 	if err != nil {
-		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
+		return "", upstreamRequestError(err, "测试失败")
 	}
 	defer response.Body.Close()
 	responseBody, _ := io.ReadAll(response.Body)
@@ -871,7 +872,7 @@ func testMiMoTTSChannelModel(channel model.ModelChannel, modelName string) (stri
 	request.Header.Set("Content-Type", "application/json")
 	response, err := adminModelHTTPClient.Do(request)
 	if err != nil {
-		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
+		return "", upstreamRequestError(err, "测试失败")
 	}
 	defer response.Body.Close()
 	responseBody, _ := io.ReadAll(response.Body)
@@ -910,6 +911,39 @@ func testArkSeedanceChannelModel(channel model.ModelChannel, modelName string) (
 		return "火山方舟官方 OpenAPI / Seedance 视频模型配置格式已通过。后台测试不会调用视频生成接口，因此未验证 API Key、模型权限或账户余额；请在视频创作台实际生成一次验证。", nil
 	}
 	return "Agent Plan / Seedance 视频模型配置格式已通过。后台测试不会调用视频生成接口，因此未验证 API Key、套餐额度或模型权限；请在画布中使用视频生成验证。", nil
+}
+
+// upstreamRequestError 把底层网络错误翻译成可定位的中文提示。
+// 之前这里直接吞掉 err、统一返回「上游接口无响应或网络不可达」，导致 DNS 解析失败、
+// 连接被拒、超时、证书错误长得一模一样，排查成本极高（实测踩过：容器 DNS 指向
+// 172.17.0.1 但没有 DNS 服务，所有上游域名都解析不了，却只看到一句通用报错）。
+func upstreamRequestError(err error, action string) error {
+	if err == nil {
+		return safeMessageError{message: action + "：上游接口无响应"}
+	}
+	message := err.Error()
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return safeMessageError{message: fmt.Sprintf("%s：域名解析失败（%s），请检查服务器 / 容器的 DNS 能否解析该域名", action, dnsErr.Name)}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return safeMessageError{message: action + "：请求上游接口超时，请检查网络连通性或上游服务状态"}
+	}
+	switch {
+	case strings.Contains(message, "Client.Timeout"):
+		return safeMessageError{message: action + "：请求上游接口超时，请检查网络连通性或上游服务状态"}
+	case strings.Contains(message, "certificate") || strings.Contains(message, "x509"):
+		return safeMessageError{message: action + "：TLS 证书校验失败，请确认接口地址的 https 证书有效"}
+	case strings.Contains(message, "connection refused"):
+		return safeMessageError{message: action + "：上游拒绝连接，请确认接口地址与端口正确"}
+	case strings.Contains(message, "no such host"):
+		return safeMessageError{message: action + "：域名无法解析，请检查服务器 / 容器的 DNS 配置"}
+	}
+	if len(message) > 300 {
+		message = message[:300] + "…"
+	}
+	return safeMessageError{message: fmt.Sprintf("%s：%s", action, message)}
 }
 
 func readAdminChannelError(body []byte, statusCode int, fallback string) error {
