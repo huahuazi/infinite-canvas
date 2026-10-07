@@ -349,13 +349,15 @@ func normalizeVideoCreateBody(body []byte, contentType string, modelName string,
 		normalized, err := service.StripGeminiModelField(body, contentType)
 		return normalized, contentType, err
 	}
-	if isKIEChannel(channel, modelName) && upstreamPath == "/jobs/createTask" {
-		return normalizeKIEVideoBody(body, contentType, modelName, channel)
-	}
-	if isAPIMartChannel(channel, modelName) && upstreamPath == "/videos/generations" {
-		return normalizeAPIMartVideoBody(body, contentType, modelName, channel)
-	}
-	return body, contentType, nil
+	return rewriteModelChannelRequestBody(body, contentType, channel, func(body []byte) ([]byte, string, error) {
+		if isKIEChannel(channel, modelName) && upstreamPath == "/jobs/createTask" {
+			return normalizeKIEVideoBody(body, contentType, modelName, channel)
+		}
+		if isAPIMartChannel(channel, modelName) && upstreamPath == "/videos/generations" {
+			return normalizeAPIMartVideoBody(body, contentType, modelName, channel)
+		}
+		return body, contentType, nil
+	})
 }
 
 func doAIRequest(request *http.Request, channel model.ModelChannel) ([]byte, int, error) {

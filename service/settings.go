@@ -227,6 +227,12 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		if setting.Channels[i].Models == nil {
 			setting.Channels[i].Models = []string{}
 		}
+		// 映射表里 value 为空的条目直接剔除，否则 UpstreamModelName 会拿到空串。
+		for alias, upstream := range setting.Channels[i].ModelAliases {
+			if strings.TrimSpace(upstream) == "" {
+				delete(setting.Channels[i].ModelAliases, alias)
+			}
+		}
 		if setting.Channels[i].Weight <= 0 {
 			setting.Channels[i].Weight = 1
 		}
@@ -330,30 +336,83 @@ func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 		return baseURL + path
 	}
 	lowerBaseURL := strings.ToLower(baseURL)
-	if !strings.HasSuffix(lowerBaseURL, "/v1") && !strings.HasSuffix(lowerBaseURL, "/api/v3") && !strings.HasSuffix(lowerBaseURL, "/api/plan/v3") && !strings.HasSuffix(lowerBaseURL, "/api/paas/v4") {
+	if !hasVersionPathSegment(lowerBaseURL) && !strings.HasSuffix(lowerBaseURL, "/v1") {
 		baseURL += "/v1"
 	}
 	return baseURL + path
 }
 
+// versionPaths 是各协议在 Base URL 里声明版本号的路径段。
+// 注意它们只是「路径段」，后面允许再跟子路径（如灵智按秒版的 /api/v3/anmiao），
+// 所以判断必须按路径段匹配，不能用 HasSuffix。
+var versionPaths = []string{"/api/plan/v3", "/api/paas/v4", "/api/v3"}
+
+// knownTaskPaths 是用户容易误粘到 Base URL 末尾的完整任务路径，归一化时需要裁掉。
+// 只裁这些明确的任务路径，不能看到 "/api/v3/" 就截断，否则会把 /api/v3/anmiao 这类
+// 中转站自定义前缀吃掉，导致请求打到错误的上游节点。
+var knownTaskPaths = []string{"/contents/generations/tasks", "/generation/tasks"}
+
+// hasVersionPathSegment 判断 Base URL 的路径里是否出现了版本段（可在中间或结尾）。
+func hasVersionPathSegment(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	lowerPath := strings.ToLower(strings.TrimRight(parsed.Path, "/"))
+	for _, versionPath := range versionPaths {
+		if index := strings.Index(lowerPath, versionPath); index >= 0 {
+			end := index + len(versionPath)
+			if len(lowerPath) == end || lowerPath[end] == '/' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasArkOpenAPIVersionPath 判断 Base URL 是否命中火山方舟标准 OpenAPI 的版本段，
+// 且不是 Agent Plan。灵智按秒版的 /api/v3/anmiao 也算命中。
+func hasArkOpenAPIVersionPath(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	lowerPath := strings.ToLower(strings.TrimRight(parsed.Path, "/"))
+	if index := strings.Index(lowerPath, "/api/plan/v3"); index >= 0 {
+		end := index + len("/api/plan/v3")
+		if len(lowerPath) == end || lowerPath[end] == '/' {
+			return false
+		}
+	}
+	if index := strings.Index(lowerPath, "/api/v3"); index >= 0 {
+		end := index + len("/api/v3")
+		if len(lowerPath) == end || lowerPath[end] == '/' {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeModelChannelBaseURL(baseURL string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	parsed, err := url.Parse(baseURL)
-	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
-		path := strings.TrimRight(parsed.Path, "/")
-		lowerPath := strings.ToLower(path)
-		for _, versionPath := range []string{"/api/plan/v3", "/api/paas/v4", "/api/v3"} {
-			if index := strings.Index(lowerPath, versionPath); index >= 0 {
-				end := index + len(versionPath)
-				if len(lowerPath) == end || lowerPath[end] == '/' {
-					parsed.Path = path[:end]
-					parsed.RawPath = ""
-					parsed.RawQuery = ""
-					parsed.Fragment = ""
-					return strings.TrimRight(parsed.String(), "/")
-				}
-			}
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return baseURL
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	lowerPath := strings.ToLower(path)
+	// 只裁掉「版本段 + 已知任务路径」这种误粘的完整接口地址；
+	// 版本段后面跟的是中转站自定义前缀（如 /anmiao）时必须原样保留。
+	for _, taskPath := range knownTaskPaths {
+		if !strings.HasSuffix(lowerPath, taskPath) {
+			continue
 		}
+		trimmed := strings.TrimRight(path[:len(path)-len(taskPath)], "/")
+		parsed.Path = trimmed
+		parsed.RawPath = ""
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		return strings.TrimRight(parsed.String(), "/")
 	}
 	return baseURL
 }
@@ -376,7 +435,47 @@ func isArkOpenAPIChannel(channel model.ModelChannel) bool {
 		return true
 	}
 	baseURL := strings.ToLower(normalizeModelChannelBaseURL(channel.BaseURL))
-	return strings.HasSuffix(baseURL, "/api/v3")
+	return strings.HasSuffix(baseURL, "/api/v3") || hasArkOpenAPIVersionPath(baseURL)
+}
+
+// IsAnmiaoBaseURL 判断渠道是否为灵智（lk888.ai）的按秒计费 Ark 通道。
+// 该通道与火山官方有几处关键差异：model 必须传 doubao-* 真名、
+// duration 不接受 -1、不支持 asset:// 素材引用、产物是永久地址。
+func IsAnmiaoBaseURL(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	lowerPath := strings.ToLower(strings.TrimRight(parsed.Path, "/"))
+	if index := strings.Index(lowerPath, "/api/v3"); index >= 0 {
+		end := index + len("/api/v3")
+		return lowerPath[end:] == "/anmiao"
+	}
+	return false
+}
+
+// IsAnmiaoChannel 判断渠道是否为灵智按秒计费通道。
+func IsAnmiaoChannel(channel model.ModelChannel) bool {
+	return IsAnmiaoBaseURL(channel.BaseURL)
+}
+
+// UpstreamModelName 返回实际发给上游的 model 名。
+// 很多中转站对外暴露的是自己的计费 SKU（如灵智的 seedance-2.5-guanfang-anmiao），
+// 但 Ark 接口只认火山真名（doubao-seedance-2-5-260628），
+// 因此允许渠道配置 modelAliases 做「前端名 -> 上游名」的映射。
+func UpstreamModelName(channel model.ModelChannel, modelName string) string {
+	name := strings.TrimSpace(modelName)
+	if name == "" {
+		return modelName
+	}
+	for alias, upstream := range channel.ModelAliases {
+		if strings.EqualFold(strings.TrimSpace(alias), name) {
+			if target := strings.TrimSpace(upstream); target != "" {
+				return target
+			}
+		}
+	}
+	return modelName
 }
 
 func isSeedanceModelName(modelName string) bool {
@@ -1134,16 +1233,28 @@ func publicChannelInfos(channels []model.ModelChannel) []model.PublicModelChanne
 			continue
 		}
 		result = append(result, model.PublicModelChannelInfo{
-			ID:       channel.ID,
-			Protocol: channel.Protocol,
-			Name:     channel.Name,
-			BaseURL:  channel.BaseURL,
-			Models:   append([]string{}, channel.Models...),
-			Weight:   channel.Weight,
-			Timeout:  channel.Timeout,
-			Enabled:  channel.Enabled,
-			Remark:   channel.Remark,
+			ID:           channel.ID,
+			Protocol:     channel.Protocol,
+			Name:         channel.Name,
+			BaseURL:      channel.BaseURL,
+			Models:       append([]string{}, channel.Models...),
+			ModelAliases: cloneStringMap(channel.ModelAliases),
+			Weight:       channel.Weight,
+			Timeout:      channel.Timeout,
+			Enabled:      channel.Enabled,
+			Remark:       channel.Remark,
 		})
+	}
+	return result
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(input))
+	for key, value := range input {
+		result[key] = value
 	}
 	return result
 }

@@ -15,6 +15,10 @@ export type LocalModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    // 把「前端模型名」映射为「上游真实 model 名」。中转站常对外暴露自己的计费 SKU
+    // （如灵智的 seedance-2.5-guanfang-anmiao），但 Ark 接口只认火山真名
+    //（doubao-seedance-2-5-260628）。key 是用户看到的名字，value 是发给上游的 model。
+    modelAliases?: Record<string, string>;
     script?: string;
     scriptCapability?: ModelCapability;
 };
@@ -93,7 +97,7 @@ export type AiConfig = {
         workflowAgent: string;
     };
     localChannels: LocalModelChannel[];
-    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
+    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; modelAliases?: Record<string, string>; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
     syncStorageConfig: boolean;
     syncWebDAVStorageConfig: boolean;
     activeChannelId: string;
@@ -520,6 +524,8 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",
         models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
+        // 映射表里 value 为空的条目直接剔除，否则解析时会拿到空串。
+        modelAliases: Object.fromEntries(Object.entries(channel.modelAliases || {}).filter(([, upstream]) => String(upstream || "").trim())),
         script: channel.script || undefined,
         scriptCapability: channel.scriptCapability || undefined,
     }));
@@ -562,10 +568,34 @@ export function localChannelForActiveModel(config: AiConfig) {
     return channels.find((channel) => channel.id === preferredId && channel.models.includes(config.model)) || channels.find((channel) => channel.models.includes(config.model)) || channels.find((channel) => channel.id === preferredId) || channels[0];
 }
 
+// ActiveChannelInfo 是「当前生效渠道」的统一视图：云端渠道与本地渠道的字段都是可选，
+// 调用方只需 baseUrl / models / modelAliases / protocol 这些做能力判断。
+export type ActiveChannelInfo = {
+    id?: string;
+    protocol?: LocalModelChannel["protocol"];
+    baseUrl?: string;
+    models?: string[];
+    modelAliases?: Record<string, string>;
+    apiKey?: string;
+};
+
+// activeChannelForConfig 返回当前生效渠道（云端模式取后台渠道，本地模式取本地渠道）。
+// 判断渠道能力（如灵智按秒通道）时必须用它：云端模式下 localChannelForActiveModel
+// 返回的是本地渠道，拿不到后台渠道的 baseUrl，会把云端渠道误判成普通渠道。
+export function activeChannelForConfig(config: AiConfig): ActiveChannelInfo | undefined {
+    if (config.channelMode === "remote") {
+        const preferredId = channelIdForActiveModel(config);
+        const channels = config.publicChannels;
+        return channels.find((item) => item.id === preferredId && (item.models || []).includes(config.model))
+            || channels.find((item) => (item.models || []).includes(config.model))
+            || channels.find((item) => item.id === preferredId)
+            || channels[0];
+    }
+    return localChannelForActiveModel(config);
+}
+
 export function channelProtocolForConfig(config: AiConfig): LocalModelChannel["protocol"] {
-    const channel = config.channelMode === "remote"
-        ? config.publicChannels.find((item) => item.id === channelIdForActiveModel(config)) || config.publicChannels[0]
-        : localChannelForActiveModel(config);
+    const channel = activeChannelForConfig(config);
     return channel?.protocol || "openai";
 }
 

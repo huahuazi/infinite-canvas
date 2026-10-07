@@ -32,12 +32,21 @@ export const seedanceDurationOptions = [-1, 4, 5, 6, 8, 10, 12, 15] as const;
 // Seedance 2.5 支持 30 秒连贯直出，其余模型上限 15 秒。
 export const seedance25DurationOptions = [-1, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30] as const;
 
+// 按秒计费渠道（灵智 anmiao）不接受 -1 智能时长，界面里要去掉这个选项，
+// 免得用户选了之后到上游才收到 400。
+export const seedance25FixedDurationOptions = [4, 5, 6, 8, 10, 12, 15, 20, 25, 30] as const;
+export const seedanceFixedDurationOptions = [4, 5, 6, 8, 10, 12, 15] as const;
+
 export function isSeedance25Model(model: string) {
     const value = String(model || "").toLowerCase();
     return value.includes("seedance-2-5") || value.includes("seedance-2.5");
 }
 
-export function seedanceDurationOptionsFor(model: string) {
+// 传 baseUrl 时，按秒渠道返回不含 -1 的时长选项。
+export function seedanceDurationOptionsFor(model: string, baseUrl?: string) {
+    if (baseUrl && isAnmiaoBaseUrl(baseUrl)) {
+        return isSeedance25Model(model) ? seedance25FixedDurationOptions : seedanceFixedDurationOptions;
+    }
     return isSeedance25Model(model) ? seedance25DurationOptions : seedanceDurationOptions;
 }
 
@@ -124,6 +133,25 @@ export function isArkHost(baseUrl: string) {
     return /(^|\.)volces\.com$/i.test(hostnameOf(baseUrl));
 }
 
+// 灵智（lk888.ai）按秒计费通道，Base URL 形如：
+// https://api.lk888.ai/api/v3/anmiao
+//
+// 与火山官方的关键差异（接入文档逐条对齐）：
+//   1. 对外暴露的是计费 SKU（seedance-2.5-guanfang-anmiao），请求体 model 必须是火山真名
+//      doubao-seedance-2-5-260628，否则上游直接 400。
+//   2. duration 必须是 4~30 的整数秒，不接受 -1（智能时长）。
+//   3. 不支持 asset:// 素材库引用（火山素材 ID 是账号级授权，中转站无法透传）。
+//   4. 产物 video_url 是平台永久地址，不需要再转存。
+//   5. seed / watermark / generate_audio / service_tier 等「收下但不生效」，发了徒增校验失败风险。
+export function isAnmiaoBaseUrl(baseUrl: string) {
+    return /\/api\/v3\/anmiao(?:\/|$)/i.test(String(baseUrl || "").trim());
+}
+
+// 按秒计费渠道不接受 duration=-1，需要收敛成具体秒数。
+export function isAnmiaoChannelConfig(baseUrl: string) {
+    return isAnmiaoBaseUrl(baseUrl);
+}
+
 // 视频生成任务路径（火山方舟 OpenAPI 与 Agent Plan 共用同一套任务接口）。
 export const ARK_VIDEO_TASK_PATH = "/contents/generations/tasks";
 
@@ -189,11 +217,17 @@ export function normalizeResolutionToken(value: string) {
     return `${resolution}p`;
 }
 
-export function normalizeSeedanceDuration(value: string, model = "") {
-    if (String(value).trim() === "-1") return -1;
+export function normalizeSeedanceDuration(value: string, model = "", baseUrl = "") {
+    // 按秒计费渠道（灵智 anmiao）不接受 -1，传上去会被上游 400，这里直接落到默认秒数。
+    if (String(value).trim() === "-1") {
+        return baseUrl && isAnmiaoBaseUrl(baseUrl) ? ANMIAO_FALLBACK_DURATION : -1;
+    }
     const seconds = Math.floor(Number(value) || 5);
     return Math.max(4, Math.min(seedanceDurationMax(model), seconds));
 }
+
+// 灵智按秒通道在 duration=-1 时的兜底秒数，落在文档给的 4~30 区间内。
+export const ANMIAO_FALLBACK_DURATION = 5;
 
 export function normalizeSeedanceRatio(value: string) {
     if (!value || value === "auto" || value === "adaptive") return "adaptive";

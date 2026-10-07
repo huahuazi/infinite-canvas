@@ -190,6 +190,11 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 			return
 		}
 	}
+	// 中转站的计费 SKU 往往不是上游真名（如灵智 seedance-2.5-guanfang-anmiao → doubao-seedance-2-5-260628），
+	// 统一在最后一步按渠道映射表改写 model，避免每个协议分支各写一遍。
+	if rewritten, rewriteErr := applyChannelModelAlias(body, contentType, channel); rewriteErr == nil {
+		body = rewritten
+	}
 	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
 	if err != nil {
 		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, upstreamPath), err)

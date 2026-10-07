@@ -20,10 +20,15 @@ type ModelChannel struct {
 	BaseURL  string   `json:"baseUrl"`
 	APIKey   string   `json:"apiKey"`
 	Models   []string `json:"models"`
-	Weight   int      `json:"weight"`
-	Timeout  int      `json:"timeout"`
-	Enabled  bool     `json:"enabled"`
-	Remark   string   `json:"remark"`
+	// ModelAliases 把「前端模型名」映射为「上游真实 model 名」。
+	// 中转站常对外暴露自己的计费 SKU（如灵智的 seedance-2.5-guanfang-anmiao），
+	// 但 Ark 接口只认火山真名（如 doubao-seedance-2-5-260628）。
+	// key 是用户在前端看到的名字，value 是发给上游的 model；两边同名时无需配置。
+	ModelAliases map[string]string `json:"modelAliases,omitempty"`
+	Weight       int               `json:"weight"`
+	Timeout      int               `json:"timeout"`
+	Enabled      bool              `json:"enabled"`
+	Remark       string            `json:"remark"`
 }
 
 // ModelCost 模型算力点配置。
@@ -61,10 +66,13 @@ type PublicModelChannelInfo struct {
 	Name     string   `json:"name"`
 	BaseURL  string   `json:"baseUrl"`
 	Models   []string `json:"models"`
-	Weight   int      `json:"weight"`
-	Timeout  int      `json:"timeout"`
-	Enabled  bool     `json:"enabled"`
-	Remark   string   `json:"remark"`
+	// ModelAliases 随公开信息下发，前端在本地渠道直连场景需要按同一套映射改写 model，
+	// 否则「后台测试通过但生成 400」的问题会换个渠道再出现一次。
+	ModelAliases map[string]string `json:"modelAliases,omitempty"`
+	Weight       int                `json:"weight"`
+	Timeout      int                `json:"timeout"`
+	Enabled      bool               `json:"enabled"`
+	Remark       string             `json:"remark"`
 }
 
 // PublicSetting 公开配置。

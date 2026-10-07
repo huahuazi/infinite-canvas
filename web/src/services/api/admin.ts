@@ -185,6 +185,10 @@ export type AdminModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    // 把「前端模型名」映射为「上游真实 model 名」。中转站常对外暴露自己的计费 SKU
+    //（如灵智的 seedance-2.5-guanfang-anmiao），但 Ark 接口只认火山真名
+    //（doubao-seedance-2-5-260628）。
+    modelAliases?: Record<string, string>;
     weight: number;
     timeout: number;
     enabled: boolean;

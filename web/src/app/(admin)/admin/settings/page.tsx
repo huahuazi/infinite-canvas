@@ -8,7 +8,8 @@ import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
-import { arkChannelTips, flatkeyChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
+import { anmiaoChannelTips, arkChannelTips, flatkeyChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
+import { isAnmiaoBaseUrl as isAnmiaoChannelBaseUrl } from "@/lib/seedance-video";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -70,7 +71,7 @@ export default function AdminSettingsPage() {
     const [editorMode, setEditorMode] = useState<Record<SettingsTabKey, EditorMode>>({ public: "visual", private: "visual" });
     const [jsonText, setJsonText] = useState<Record<SettingsTabKey, string>>({ public: "", private: "" });
     const [channels, setChannels] = useState<AdminModelChannel[]>([]);
-    const [channelForm] = Form.useForm<AdminModelChannel>();
+    const [channelForm] = Form.useForm<ChannelFormValues>();
     const [editingChannelIndex, setEditingChannelIndex] = useState<number | null>(null);
     const [isChannelDrawerOpen, setIsChannelDrawerOpen] = useState(false);
     const [testChannelIndex, setTestChannelIndex] = useState<number | null>(null);
@@ -187,7 +188,8 @@ export default function AdminSettingsPage() {
         setEditingChannelIndex(index);
         setIsChannelDrawerOpen(true);
         const channel = index === null ? emptyChannel : normalizeChannel(channels[index]);
-        channelForm.setFieldsValue(channel);
+        // modelAliases 在表单里是纯文本，展开成可编辑的「key = value」多行文本。
+        channelForm.setFieldsValue({ ...channel, modelAliasesText: modelAliasesToText(channel.modelAliases) });
         rememberModels(channel.models);
     };
 
@@ -198,7 +200,9 @@ export default function AdminSettingsPage() {
     };
 
     const saveChannel = async () => {
-        const channel = normalizeChannel(await channelForm.validateFields());
+        const values: ChannelFormValues = await channelForm.validateFields();
+        // modelAliasesText 只是给用户看的纯文本，真正入库的是解析后的 modelAliases。
+        const channel = normalizeChannel({ ...values, modelAliases: parseModelAliasesText(values.modelAliasesText) });
         rememberModels(channel.models);
         const nextChannels = [...channels];
         if (editingChannelIndex === null) nextChannels.push(channel);
@@ -908,6 +912,16 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
+                                <Form.Item
+                                    label="模型名映射"
+                                    extra={isAnmiaoChannelBaseUrl(channelForm.getFieldValue("baseUrl")) ? `${anmiaoChannelTips.modelAliases}\n${anmiaoChannelTips.limits}` : "可选。每行一条「前端模型名 = 上游模型名」，用于把中转站的计费 SKU 映射成上游真实模型名；两边同名时不需要填。"}
+                                >
+                                    <Form.Item name="modelAliasesText" noStyle>
+                                        <Input.TextArea rows={3} placeholder={"seedance-2.5-guanfang-anmiao = doubao-seedance-2-5-260628"} onChange={(event) => channelForm.setFieldValue("modelAliases", parseModelAliasesText(event.target.value))} />
+                                    </Form.Item>
+                                </Form.Item>
+                            </Col>
+                            <Col span={24}>
                                 <Form.Item name="remark" label="备注">
                                     <Input.TextArea rows={3} />
                                 </Form.Item>
@@ -1102,6 +1116,9 @@ function newAdminStorageProvider(type: AdminStorageProvider["type"], providers: 
     };
 }
 
+// 渠道抽屉的表单值：在 AdminModelChannel 基础上多一个用于编辑映射的纯文本字段。
+type ChannelFormValues = Partial<AdminModelChannel> & { modelAliasesText?: string };
+
 function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChannel {
     return {
         id: item.id || "",
@@ -1110,11 +1127,41 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         baseUrl: item.baseUrl || "",
         apiKey: item.apiKey || "",
         models: item.models || [],
+        modelAliases: normalizeModelAliases(item.modelAliases),
         weight: Math.max(1, Number(item.weight) || 1),
         timeout: Math.max(1, Number(item.timeout) || 600),
         enabled: item.enabled !== false,
         remark: item.remark || "",
     };
+}
+
+// 映射表里 key / value 任一为空、或两侧同名（映射等于没映射）的条目直接丢弃。
+function normalizeModelAliases(input?: Record<string, string> | null): Record<string, string> | undefined {
+    if (!input || typeof input !== "object") return undefined;
+    const entries = Object.entries(input)
+        .map(([alias, upstream]) => [String(alias || "").trim(), String(upstream || "").trim()] as const)
+        .filter(([alias, upstream]) => Boolean(alias) && Boolean(upstream) && alias !== upstream);
+    return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+// 「前端模型名 = 上游模型名」的纯文本与 Record 互转，方便在表单里用 textarea 编辑。
+function modelAliasesToText(aliases?: Record<string, string> | null) {
+    return Object.entries(aliases || {})
+        .map(([alias, upstream]) => `${alias} = ${upstream}`)
+        .join("\n");
+}
+
+function parseModelAliasesText(text?: string): Record<string, string> | undefined {
+    const result: Record<string, string> = {};
+    for (const line of String(text || "").split("\n")) {
+        // 同时兼容 "=" 与 "->" 两种写法，避免用户顺手写成箭头导致整条映射失效。
+        const index = Math.max(line.indexOf("="), line.indexOf("->"));
+        if (index <= 0) continue;
+        const alias = line.slice(0, index).trim();
+        const upstream = line.slice(index + (line[index] === "=" ? 1 : 2)).trim();
+        if (alias && upstream) result[alias] = upstream;
+    }
+    return normalizeModelAliases(result);
 }
 
 function modelCostCredits(items: AdminSettings["public"]["modelChannel"]["modelCosts"], model: string) {

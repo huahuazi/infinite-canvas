@@ -4,10 +4,17 @@ import { type CSSProperties, type ReactNode } from "react";
 import { Input, Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
-import { boolConfig, isSeedance25Model, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationMax, seedanceDurationOptionsFor, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
+import { boolConfig, isAnmiaoBaseUrl, isSeedance25Model, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationMax, seedanceDurationOptionsFor, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { COGVIDEOX3_DURATIONS, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
-import { channelIdForActiveModel, channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { activeChannelForConfig, channelIdForActiveModel, channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+
+// 当前生效渠道的 Base URL。必须用 activeChannelForConfig：云端渠道模式下
+// localChannelForActiveModel 返回的是本地渠道，会把后台渠道误判成普通渠道。
+function channelBaseUrlForConfig(config: AiConfig) {
+    const channel = activeChannelForConfig(config);
+    return channel?.baseUrl || config.baseUrl || "";
+}
 
 export const videoResolutionOptions = [
     { value: "720", label: "720p" },
@@ -278,9 +285,12 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
     const model = modelName || config.model || config.videoModel;
     const resolution = normalizeSeedanceResolution(config.vquality, model);
     const ratio = normalizeSeedanceRatio(config.size);
-    const duration = normalizeSeedanceDuration(config.videoSeconds, model);
-    const durationOptions = seedanceDurationOptionsFor(model);
+    // 按秒计费渠道（灵智 anmiao）不接受 -1 智能时长，选项与下限都要去掉。
+    const anmiao = isAnmiaoBaseUrl(channelBaseUrlForConfig(config));
+    const duration = normalizeSeedanceDuration(config.videoSeconds, model, channelBaseUrlForConfig(config));
+    const durationOptions = seedanceDurationOptionsFor(model, channelBaseUrlForConfig(config));
     const durationMax = seedanceDurationMax(model);
+    const durationMin = anmiao ? 4 : -1;
     const watermark = boolConfig(config.videoWatermark, false);
     const audioGenerationEnabled = supportsVideoAudioGeneration(model);
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
@@ -338,10 +348,14 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
                                     </OptionPill>
                                 ))}
                             </div>
-                            <NumberInput value={String(duration)} min={-1} max={durationMax} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                            <NumberInput value={String(duration)} min={durationMin} max={durationMax} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
                             {isSeedance25 ? <div className="text-[11px] leading-4 opacity-55">Seedance 2.5 支持最长 30 秒连贯直出。</div> : null}
+                            {anmiao ? <div className="text-[11px] leading-4 opacity-55">当前渠道按秒计费，需明确选择时长（不支持智能时长）。</div> : null}
                         </SettingGroup>
-                        {audioGenerationEnabled ? <AudioGenerationSetting checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}
+                        {audioGenerationEnabled && !anmiao ? <AudioGenerationSetting checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}
+                        {anmiao ? (
+                            <div className="text-[11px] leading-4 opacity-55">当前渠道视频恒有声、无水印，水印与音频开关不生效。</div>
+                        ) : null}
                         <SettingGroup title="输出" color={theme.node.muted}>
                             <div className="grid gap-2 rounded-xl border p-2.5" style={{ borderColor: theme.node.stroke }}>
                                 <SwitchRow label="添加水印" checked={watermark} theme={theme} onChange={(checked) => onConfigChange("videoWatermark", String(checked))} />
@@ -350,6 +364,7 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
                                 {isSeedance25 ? <SwitchRow label="样片模式（先出草图确认）" checked={boolConfig(config.videoArkDraft, false)} theme={theme} onChange={(checked) => onConfigChange("videoArkDraft", String(checked))} /> : null}
                             </div>
                         </SettingGroup>
+                        {anmiao ? null : (
                         <SettingGroup title="火山方舟" color={theme.node.muted}>
                             <div className="grid gap-2.5 rounded-xl border p-2.5" style={{ borderColor: theme.node.stroke }}>
                                 <div className="text-[11px] leading-4 opacity-55">任务类型（默认自动判定）</div>
@@ -384,6 +399,7 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
                                 </div>
                             </div>
                         </SettingGroup>
+                        )}
                     </>
                 ) : null}
             </div>

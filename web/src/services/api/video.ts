@@ -4,12 +4,12 @@ import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
-import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
+import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isAnmiaoBaseUrl, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
+import { activeChannelForConfig, buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -52,7 +52,7 @@ function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
     if (protocol === "kie" || protocol === "apimart" || protocol === "grok2api") return false;
     // 后台渠道显式选择「火山方舟（Ark）」协议时直接判定，不必再猜接口地址。
     if (protocol === "ark") return true;
-    const channel = localChannelForActiveModel(config);
+    const channel = activeChannelForConfig(config);
     const baseUrl = channel?.baseUrl || config.baseUrl || "";
     // Flatkey 的视频任务协议与 Ark 同构（content[] 请求体 + 任务式轮询），复用 Ark 的请求体与响应解析；
     // 只有任务路径不同，由 flatkeyVideoApiUrl 单独处理。
@@ -65,7 +65,7 @@ function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
 }
 
 function arkChannelBaseUrl(config: AiConfig) {
-    const channel = localChannelForActiveModel(config);
+    const channel = activeChannelForConfig(config);
     return normalizeArkBaseUrl(channel?.baseUrl || config.baseUrl || "");
 }
 
@@ -80,13 +80,13 @@ function arkVideoApiUrl(config: AiConfig, taskId: string) {
 // 文档里的 /v1/generation/tasks 只对部分通道类型开放，seedance 系列会被上游拒绝。
 function isFlatkeyVideoRequest(config: AiConfig) {
     if (channelProtocolForConfig(config) === "flatkey") return true;
-    const channel = localChannelForActiveModel(config);
+    const channel = activeChannelForConfig(config);
     return isFlatkeyBaseUrl(channel?.baseUrl || config.baseUrl || "");
 }
 
 function flatkeyVideoApiUrl(config: AiConfig, taskId: string) {
     if (usesAccountProxy(config)) return taskId ? `/api/v1/videos/${encodeURIComponent(taskId)}` : "/api/v1/videos";
-    const channel = localChannelForActiveModel(config);
+    const channel = activeChannelForConfig(config);
     const baseUrl = normalizeFlatkeyBaseUrl(channel?.baseUrl || config.baseUrl || "");
     if (!baseUrl) throw new VideoRequestError("Flatkey 渠道地址不能为空");
     return `${baseUrl}${FLATKEY_VIDEO_PATH}${taskId ? `/${encodeURIComponent(taskId)}` : ""}`;
@@ -94,7 +94,7 @@ function flatkeyVideoApiUrl(config: AiConfig, taskId: string) {
 
 function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
     if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
-        const channel = localChannelForActiveModel(config);
+        const channel = activeChannelForConfig(config);
         return geminiOperationUrl(channel?.baseUrl || config.baseUrl, id);
     }
     if (!usesAccountProxy(config) && isMiniMaxH3Config(config, model)) {
@@ -115,13 +115,13 @@ function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
     if (usesAccountProxy(config)) {
         return `/api/v1/videos/${encodeURIComponent(id)}`;
     }
-    const channel = localChannelForActiveModel(config);
+    const channel = activeChannelForConfig(config);
     const baseUrl = agnesBaseUrl(channel?.baseUrl || config.baseUrl);
     return `${baseUrl}/agnesapi?video_id=${encodeURIComponent(id)}&model_name=${encodeURIComponent(model)}`;
 }
 
 function miniMaxApiUrl(config: AiConfig, path: string) {
-    const channel = localChannelForActiveModel(config);
+    const channel = activeChannelForConfig(config);
     return `${(channel?.baseUrl || config.baseUrl).trim().replace(/\/+$/, "")}${path}`;
 }
 
@@ -276,10 +276,13 @@ async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: Vi
 
 // 火山方舟的产物 URL 仅 24 小时有效（Seedance 2.5 还限制最多下载 100 次），
 // 生成完成后立即转存到项目存储，避免链接过期后片子直接丢失。
+// 灵智按秒通道例外：它的 content.video_url 本身就是平台永久地址，不需要转存。
 async function cacheProtectedArkVideo(config: AiConfig, model: string, task: VideoResponse) {
     const url = task.video_url || task.url || "";
     if (!isCompletedVideoStatus(task.status) || task.storageKey || !isArkSeedanceVideoRequest(config, model)) return task;
     if (!/^https?:\/\//i.test(url)) return task;
+    const channelBaseUrl = activeChannelForConfig(config)?.baseUrl || config.baseUrl || "";
+    if (isAnmiaoBaseUrl(channelBaseUrl)) return task;
     try {
         const media = await uploadRemoteMediaToServer(url, `ark-video-${task.id || Date.now()}.mp4`);
         return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
@@ -823,6 +826,17 @@ async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string
     if (hasFrames && hasReferences) {
         throw new VideoRequestError("火山方舟的首尾帧模式与参考素材模式互斥，请只保留首帧/尾帧，或只保留参考图、参考视频、参考音频");
     }
+    // 灵智按秒通道不支持 asset:// 素材库引用（火山素材 ID 是账号级授权，中转站无法透传），
+    // 提前拦下并给可操作的提示，而不是让上游返回一个看不懂的错。
+    const channel = activeChannelForConfig(config);
+    const channelBaseUrl = channel?.baseUrl || config.baseUrl || "";
+    const anmiao = isAnmiaoBaseUrl(channelBaseUrl);
+    if (anmiao) {
+        const allRefs = [input.firstFrame, input.lastFrame, ...input.references, ...input.videoReferences, ...input.audioReferences];
+        if (allRefs.filter((item): item is NonNullable<typeof item> => Boolean(item)).some((item) => hasArkAssetReference(item))) {
+            throw new VideoRequestError("当前渠道不支持火山素材库（asset://）引用，请改用上传图片/视频/音频文件，或换用支持素材库的火山方舟官方渠道");
+        }
+    }
     const content: Record<string, unknown>[] = [{ type: "text", text: prompt }];
 
     if (hasFrames) {
@@ -852,28 +866,40 @@ async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string
         }
     }
 
-    const duration = normalizeSeedanceDuration(config.videoSeconds, model);
+    // 灵智等中转站对外暴露的是计费 SKU，请求体 model 必须传上游真名，
+    // 映射没配时原样透传（本地渠道直连场景由这里兜底，云端渠道由后端改写）。
+    const upstreamModel = upstreamModelNameForChannel(channel, model);
+
+    const duration = normalizeSeedanceDuration(config.videoSeconds, model, channelBaseUrl);
     const body: Record<string, unknown> = {
-        model,
+        model: upstreamModel,
         content,
         ratio: arkRatioForRequest(model, config.size, Boolean(input.firstFrame || input.lastFrame)),
         resolution: normalizeSeedanceResolution(config.vquality, model),
-        watermark: boolConfig(config.videoWatermark, false),
     };
+    if (!anmiao) {
+        // 灵智按秒通道「收下但不生效」watermark，省掉不发。
+        body.watermark = boolConfig(config.videoWatermark, false);
+    }
     // 火山方舟用 duration=-1 表示「智能」；Flatkey 只接受 4-30，选了智能就不传，交给上游默认。
+    // 灵智按秒通道已在 normalizeSeedanceDuration 里把 -1 收敛成具体秒数。
     if (!(isFlatkeyVideoRequest(config) && duration === -1)) body.duration = duration;
     const taskType = arkTaskType(config, input);
     if (taskType) body.omni_reference_task_type = taskType;
     // 以下均为可选参数，只在用户显式启用时才写入。
     // 官方对参数是强校验，未启用就不传，避免旧模型（1.0 / 1.5）收到不支持的字段直接报错。
-    if (arkServiceTier(config, model) === "flex") body.service_tier = "flex";
-    if (arkOutputFormat(config) === "mov") body.output_format = "mov";
-    if (boolConfig(config.videoArkDraft, false)) body.draft = true;
-    if (boolConfig(config.videoArkCameraFixed, false)) body.camera_fixed = true;
-    if (boolConfig(config.videoArkReturnLastFrame, false)) body.return_last_frame = true;
-    const seed = Number(String(config.videoArkSeed || "").trim());
-    if (String(config.videoArkSeed || "").trim() !== "" && Number.isFinite(seed)) body.seed = Math.trunc(seed);
-    if (supportsArkSeedanceAudio(model)) body.generate_audio = boolConfig(config.videoGenerateAudio, false);
+    // 灵智按秒通道对 seed / watermark / generate_audio / service_tier 等一律「收下但不生效」，
+    // 发了只是徒增被强校验拒绝的风险，直接不发。
+    if (!anmiao) {
+        if (arkServiceTier(config, model) === "flex") body.service_tier = "flex";
+        if (arkOutputFormat(config) === "mov") body.output_format = "mov";
+        if (boolConfig(config.videoArkDraft, false)) body.draft = true;
+        if (boolConfig(config.videoArkCameraFixed, false)) body.camera_fixed = true;
+        if (boolConfig(config.videoArkReturnLastFrame, false)) body.return_last_frame = true;
+        const seed = Number(String(config.videoArkSeed || "").trim());
+        if (String(config.videoArkSeed || "").trim() !== "" && Number.isFinite(seed)) body.seed = Math.trunc(seed);
+        if (supportsArkSeedanceAudio(model)) body.generate_audio = boolConfig(config.videoGenerateAudio, false);
+    }
     // Base64 内联素材会显著撑大请求体，官方上限 64MB，超出直接给可操作的提示。
     if (JSON.stringify(body).length >= ARK_REQUEST_BODY_LIMIT) {
         throw new VideoRequestError("请求体超过火山方舟 64MB 上限：请减少参考素材数量，或配置 PUBLIC_BASE_URL 改用公网素材地址");
@@ -927,6 +953,29 @@ function arkAssetReferenceUrl(value?: string) {
     // 用户可能只粘贴了素材 ID（asset-...），自动补齐协议前缀。
     if (/^asset-[0-9a-z-]+$/i.test(text)) return `asset://${text}`;
     return "";
+}
+
+// 素材是否引用了火山素材库（asset:// 或裸素材 ID）。
+// 灵智等中转站无法透传这类账号级授权引用，需要提前拦下并给出可操作提示。
+function hasArkAssetReference(item?: { url?: string; storageKey?: string }) {
+    if (!item) return false;
+    return Boolean(arkAssetReferenceUrl(item.url) || arkAssetReferenceUrl(item.storageKey));
+}
+
+// 把前端看到的模型名解析成上游真实 model 名。
+// 中转站对外暴露计费 SKU（灵智 seedance-2.5-guanfang-anmiao），
+// 但 Ark 接口只认火山真名（doubao-seedance-2-5-260628）。
+// 映射表在渠道的 modelAliases 里配置，没配就原样返回。
+function upstreamModelNameForChannel(channel: { modelAliases?: Record<string, string> } | undefined, model: string) {
+    const name = String(model || "").trim();
+    const aliases = channel?.modelAliases;
+    if (!name || !aliases) return model;
+    for (const [alias, upstream] of Object.entries(aliases)) {
+        if (String(alias || "").trim().toLowerCase() === name.toLowerCase() && String(upstream || "").trim()) {
+            return String(upstream).trim();
+        }
+    }
+    return model;
 }
 
 async function arkReferenceImageUrl(image: ReferenceImage) {
