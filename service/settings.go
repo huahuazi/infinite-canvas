@@ -1256,14 +1256,36 @@ func modelChannelsForModel(channels []model.ModelChannel, modelName string) []mo
 		if !channel.Enabled || channel.BaseURL == "" || channel.APIKey == "" {
 			continue
 		}
-		for _, item := range channel.Models {
-			if strings.TrimSpace(item) == modelName {
-				result = append(result, channel)
-				break
-			}
+		if channelServesModel(channel, modelName) {
+			result = append(result, channel)
 		}
 	}
 	return result
+}
+
+// channelServesModel 判断渠道是否提供某个模型。
+// 除了 channel.Models 里的名字，还要认「模型名映射」的上游真名：
+// 前端在本地直连时会先把 model 改写成上游名（如 doubao-seedance-2-5-260628），
+// 后端如果只按 Models 里的平台 SKU 匹配，就会误报「没有可用模型渠道」。
+func channelServesModel(channel model.ModelChannel, modelName string) bool {
+	target := strings.TrimSpace(modelName)
+	if target == "" {
+		return false
+	}
+	for _, item := range channel.Models {
+		if strings.TrimSpace(item) == target {
+			return true
+		}
+	}
+	for alias, upstream := range channel.ModelAliases {
+		if strings.TrimSpace(alias) == "" || strings.TrimSpace(upstream) == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(upstream), target) {
+			return true
+		}
+	}
+	return false
 }
 
 func publicChannelInfos(channels []model.ModelChannel) []model.PublicModelChannelInfo {

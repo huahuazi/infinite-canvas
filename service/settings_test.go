@@ -125,3 +125,48 @@ func TestAnmiaoModelListURL(t *testing.T) {
 		}
 	}
 }
+
+// 前端本地直连时会把 model 改写成上游真名，后端选渠道必须能通过 ModelAliases 反查。
+func TestModelChannelsForModelMatchesAliasUpstream(t *testing.T) {
+	channels := []model.ModelChannel{
+		{
+			ID:       "lz",
+			Enabled:  true,
+			BaseURL:  "https://api.lk888.ai/api/v3/anmiao",
+			APIKey:   "sk-x",
+			Protocol: "anmiao",
+			Models:   []string{"seedance-2.5-guanfang-anmiao"},
+			ModelAliases: map[string]string{
+				"seedance-2.5-guanfang-anmiao": "doubao-seedance-2-5-260628",
+			},
+		},
+		{
+			ID:      "hub",
+			Enabled: true,
+			BaseURL: "https://hub.example.com/v1",
+			APIKey:  "sk-y",
+			Models:  []string{"gpt-image-2"},
+		},
+	}
+
+	cases := map[string]bool{
+		"seedance-2.5-guanfang-anmiao": true,  // 平台 SKU
+		"doubao-seedance-2-5-260628":   true,  // 上游真名（前端改写后的形态）
+		"DOUBAO-SEEDANCE-2-5-260628":   true,  // 大小写不敏感
+		"gpt-image-2":                  true,
+		"doubao-seedance-2-0-260128":   false, // 不在映射里
+		"":                             false,
+	}
+	for input, want := range cases {
+		got := len(modelChannelsForModel(channels, input)) > 0
+		if got != want {
+			t.Fatalf("modelChannelsForModel(%q) 命中=%v，期望 %v", input, got, want)
+		}
+	}
+
+	// 命中上游真名时，选出来的必须是灵智渠道，而不是零权重地落到第一个。
+	matched := modelChannelsForModel(channels, "doubao-seedance-2-5-260628")
+	if len(matched) != 1 || matched[0].ID != "lz" {
+		t.Fatalf("按上游真名匹配到的渠道 = %#v，期望只有 lz", matched)
+	}
+}
