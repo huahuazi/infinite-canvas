@@ -422,25 +422,37 @@ func isArkAgentPlanChannel(channel model.ModelChannel) bool {
 	return strings.HasSuffix(baseURL, "/api/plan/v3")
 }
 
-// isArkChannel 判断渠道是否属于火山方舟：显式选择 ark 协议，或地址命中官方 OpenAPI / Agent Plan。
+// isArkChannel 判断渠道是否属于火山方舟协议族：显式选择 ark / anmiao 协议，
+// 或地址命中官方 OpenAPI / Agent Plan。
+// 灵智（anmiao）是 Ark 的一种方言 —— 任务接口、请求体结构与响应格式都同 Ark，
+// 只是 model 名、duration 约束、素材引用与产物地址有几处差异。
 func isArkChannel(channel model.ModelChannel) bool {
-	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark") {
+	if isArkProtocol(channel) || isAnmiaoProtocol(channel) {
 		return true
 	}
 	return isArkOpenAPIChannel(channel) || isArkAgentPlanChannel(channel)
 }
 
+// isArkProtocol 是否显式选择了火山方舟官方协议。
+func isArkProtocol(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark")
+}
+
+// isAnmiaoProtocol 是否显式选择了灵智协议。
+func isAnmiaoProtocol(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), "anmiao")
+}
+
 func isArkOpenAPIChannel(channel model.ModelChannel) bool {
-	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark") {
+	if isArkProtocol(channel) {
 		return true
 	}
 	baseURL := strings.ToLower(normalizeModelChannelBaseURL(channel.BaseURL))
 	return strings.HasSuffix(baseURL, "/api/v3") || hasArkOpenAPIVersionPath(baseURL)
 }
 
-// IsAnmiaoBaseURL 判断渠道是否为灵智（lk888.ai）的按秒计费 Ark 通道。
-// 该通道与火山官方有几处关键差异：model 必须传 doubao-* 真名、
-// duration 不接受 -1、不支持 asset:// 素材引用、产物是永久地址。
+// IsAnmiaoBaseURL 判断 Base URL 是否指向灵智的按秒计费通道（…/api/v3/anmiao）。
+// 仅在渠道没有显式声明 protocol 时作为兜底——显式选了别的协议就不该被地址反向覆盖。
 func IsAnmiaoBaseURL(baseURL string) bool {
 	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -455,7 +467,15 @@ func IsAnmiaoBaseURL(baseURL string) bool {
 }
 
 // IsAnmiaoChannel 判断渠道是否为灵智按秒计费通道。
+// 判定顺序：显式 protocol 优先，其次按 Base URL 兜底（兼容 v0.8.x 时代没 protocol 的旧配置）。
 func IsAnmiaoChannel(channel model.ModelChannel) bool {
+	if isAnmiaoProtocol(channel) {
+		return true
+	}
+	// 已显式声明了其它协议的渠道，不再按地址反推——否则用户把协议改成 ark 却被地址"纠正"回去。
+	if strings.TrimSpace(channel.Protocol) != "" && !isArkProtocol(channel) {
+		return false
+	}
 	return IsAnmiaoBaseURL(channel.BaseURL)
 }
 

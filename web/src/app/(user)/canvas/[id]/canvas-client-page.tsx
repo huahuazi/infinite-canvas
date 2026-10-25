@@ -48,7 +48,7 @@ import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
-import { isAnmiaoBaseUrl, seedanceDurationMax, seedanceDurationOptionsFor } from "@/lib/seedance-video";
+import { isAnmiaoChannel, seedanceDurationMax, seedanceDurationOptionsFor } from "@/lib/seedance-video";
 import { VIDEO_DERIVE_PRESETS, applyVideoDeriveConfig, videoDeriveSupportIssue, type VideoDeriveKind } from "@/lib/video-derive";
 import { arkAssetReferences } from "../utils/canvas-ark-assets";
 import { useAssetStore } from "@/stores/use-asset-store";
@@ -4035,7 +4035,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         videoSeconds: agentEffectiveConfig.videoSeconds,
                         videoGenerateAudio: agentEffectiveConfig.videoGenerateAudio,
                         videoSupportsAudio: supportsVideoAudioGeneration(videoModel),
-                        videoDuration: canvasAgentVideoDurationHint(videoModel, activeChannelForConfig(agentEffectiveConfig)?.baseUrl || ""),
+                        videoDuration: (() => {
+                            const channel = activeChannelForConfig(agentEffectiveConfig);
+                            return canvasAgentVideoDurationHint(videoModel, channel?.baseUrl || "", channel?.protocol || "");
+                        })(),
                         audioVoice:
                             isGeminiTtsModel(audioModel) && isGeminiConfig({ ...agentEffectiveConfig, model: audioModel }, audioModel)
                                 ? agentEffectiveConfig.geminiTtsVoice
@@ -4254,8 +4257,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     if (mode === "video") {
                         metadata.vquality = generationConfig.vquality;
                         const seconds = typeof args.seconds === "number" ? args.seconds : Number(generationConfig.videoSeconds);
-                        const durationError = validateCanvasAgentVideoSeconds(generationConfig.model, seconds, activeChannelForConfig(generationConfig)?.baseUrl || "");
-                        if (durationError) return { ok: false, code: "unsupported_duration", message: durationError, supported: canvasAgentVideoDurationHint(generationConfig.model, activeChannelForConfig(generationConfig)?.baseUrl || "") };
+                        const generationChannel = activeChannelForConfig(generationConfig);
+                        const durationError = validateCanvasAgentVideoSeconds(generationConfig.model, seconds, generationChannel?.baseUrl || "", generationChannel?.protocol || "");
+                        if (durationError) return { ok: false, code: "unsupported_duration", message: durationError, supported: canvasAgentVideoDurationHint(generationConfig.model, generationChannel?.baseUrl || "", generationChannel?.protocol || "") };
                         const generateAudio = typeof args.generateAudio === "boolean" ? args.generateAudio : generationConfig.videoGenerateAudio === "true";
                         if (generateAudio && !supportsVideoAudioGeneration(generationConfig.model)) {
                             return { ok: false, code: "video_audio_not_supported", message: "当前全局视频模型不支持视频原生声音" };
@@ -6239,11 +6243,11 @@ function canvasAgentTaskSummary(node: CanvasNodeData) {
     };
 }
 
-function canvasAgentVideoDurationHint(modelName: string, baseUrl = "") {
+function canvasAgentVideoDurationHint(modelName: string, baseUrl = "", protocol = "") {
     const key = modelKey(modelName);
     if (isCogVideoX3Model(key)) return { values: [5, 10], range: "仅 5 或 10 秒" };
     if (key.includes("seedance")) {
-        const values = [...seedanceDurationOptionsFor(key, baseUrl)];
+        const values = [...seedanceDurationOptionsFor(key, baseUrl, protocol)];
         // 按秒计费渠道（灵智 anmiao）没有 -1 智能时长，别在提示里给 Agent 一个用不了的选项，
         // 否则它选了「智能」会被后端悄悄收敛成 5 秒，用户以为设置没生效。
         const smart = values.includes(-1);
@@ -6254,10 +6258,10 @@ function canvasAgentVideoDurationHint(modelName: string, baseUrl = "") {
     return { values: [6, 10, 12, 16, 20], range: "1-30 秒" };
 }
 
-function validateCanvasAgentVideoSeconds(modelName: string, seconds: number, baseUrl = "") {
+function validateCanvasAgentVideoSeconds(modelName: string, seconds: number, baseUrl = "", protocol = "") {
     if (!Number.isFinite(seconds)) return "视频时长无效，请先向用户确认单镜头时长";
     const key = modelKey(modelName);
-    const fixedDurationOnly = Boolean(baseUrl) && isAnmiaoBaseUrl(baseUrl);
+    const fixedDurationOnly = isAnmiaoChannel(protocol, baseUrl);
     if (isCogVideoX3Model(key) && seconds !== 5 && seconds !== 10) return "当前 CogVideoX-3 模型仅支持 5 或 10 秒";
     if (key.includes("seedance") && seconds === -1 && fixedDurationOnly) return `当前渠道按秒计费，不支持智能时长，请给 4-${seedanceDurationMax(key)} 之间的具体秒数`;
     if (key.includes("seedance") && seconds !== -1 && (seconds < 4 || seconds > seedanceDurationMax(key))) {

@@ -9,7 +9,7 @@ import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import { anmiaoChannelTips, arkChannelTips, flatkeyChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
-import { isAnmiaoBaseUrl as isAnmiaoChannelBaseUrl } from "@/lib/seedance-video";
+import { isAnmiaoChannel } from "@/lib/seedance-video";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -761,7 +761,7 @@ export default function AdminSettingsPage() {
                                     dataSource={channelTableData}
                                     columns={[
                                         { title: "名称", dataIndex: "name", render: (value) => value || "未命名渠道" },
-                                        { title: "协议", dataIndex: "protocol", width: 96, render: (value) => <Tag>{value === "ark" ? "火山方舟" : value === "flatkey" ? "Flatkey" : value || "openai"}</Tag> },
+                                        { title: "协议", dataIndex: "protocol", width: 96, render: (value) => <Tag>{value === "ark" ? "火山方舟" : value === "anmiao" ? "灵智" : value === "flatkey" ? "Flatkey" : value || "openai"}</Tag> },
                                         { title: "状态", dataIndex: "enabled", width: 96, render: (value) => <Tag color={value ? "success" : "default"}>{value ? "已启用" : "已停用"}</Tag> },
                                         {
                                             title: "模型",
@@ -891,7 +891,7 @@ export default function AdminSettingsPage() {
                                         </span>
                                     }
                                     rules={[{ required: true, message: "请输入接口地址" }]}
-                                    extra={channelProtocol === "ark" ? arkChannelTips.baseUrl : channelProtocol === "flatkey" ? flatkeyChannelTips.baseUrl : undefined}
+                                    extra={channelProtocol === "ark" ? arkChannelTips.baseUrl : channelProtocol === "anmiao" ? anmiaoChannelTips.baseUrl : channelProtocol === "flatkey" ? flatkeyChannelTips.baseUrl : undefined}
                                 >
                                     <Input />
                                 </Form.Item>
@@ -902,7 +902,7 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item label="渠道可用模型" extra={channelProtocol === "ark" ? arkChannelTips.models : channelProtocol === "flatkey" ? flatkeyChannelTips.models : undefined}>
+                                <Form.Item label="渠道可用模型" extra={channelProtocol === "ark" ? arkChannelTips.models : channelProtocol === "anmiao" ? anmiaoChannelTips.models : channelProtocol === "flatkey" ? flatkeyChannelTips.models : undefined}>
                                     <Space.Compact style={{ width: "100%" }}>
                                         <Form.Item name="models" noStyle>
                                             <Select mode="tags" maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: model, value: model }))} />
@@ -914,7 +914,7 @@ export default function AdminSettingsPage() {
                             <Col span={24}>
                                 <Form.Item
                                     label="模型名映射"
-                                    extra={isAnmiaoChannelBaseUrl(channelForm.getFieldValue("baseUrl")) ? `${anmiaoChannelTips.modelAliases}\n${anmiaoChannelTips.limits}` : "可选。每行一条「前端模型名 = 上游模型名」，用于把中转站的计费 SKU 映射成上游真实模型名；两边同名时不需要填。"}
+                                    extra={isAnmiaoChannel(channelProtocol, channelForm.getFieldValue("baseUrl")) ? `${anmiaoChannelTips.modelAliases}\n${anmiaoChannelTips.limits}` : "可选。每行一条「前端模型名 = 上游模型名」，用于把中转站的计费 SKU 映射成上游真实模型名；两边同名时不需要填。"}
                                 >
                                     <Form.Item name="modelAliasesText" noStyle>
                                         <Input.TextArea rows={3} placeholder={"seedance-2.5-guanfang-anmiao = doubao-seedance-2-5-260628"} onChange={(event) => channelForm.setFieldValue("modelAliases", parseModelAliasesText(event.target.value))} />

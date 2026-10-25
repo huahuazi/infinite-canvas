@@ -1,6 +1,6 @@
 import type { AiConfig } from "@/stores/use-config-store";
 import { activeChannelForConfig, channelProtocolForConfig } from "@/stores/use-config-store";
-import { isAnmiaoBaseUrl, isFlatkeyBaseUrl } from "@/lib/seedance-video";
+import { isAnmiaoChannel, isFlatkeyBaseUrl } from "@/lib/seedance-video";
 import { modelKey } from "@/lib/video-model-capabilities";
 
 /** 视频派生类型：白模（clay render）/ 深度图（depth map）。 */
@@ -69,7 +69,7 @@ export function videoDeriveSupportIssue(config: AiConfig, durationMs?: number): 
     }
     const channel = activeChannelForConfig(config);
     const baseUrl = channel?.baseUrl || config.baseUrl || "";
-    if (isAnmiaoBaseUrl(baseUrl)) {
+    if (isAnmiaoChannel(channelProtocolForConfig(config), baseUrl)) {
         return "灵智按秒通道会把时长强制改成 5 秒、也不承接视频编辑任务，白模 / 深度视频请切换到火山方舟官方渠道";
     }
     // Flatkey 只接受 4~30 的整数时长，duration=-1 会被本地过滤掉，而视频编辑任务必须传 -1。

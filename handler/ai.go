@@ -674,8 +674,9 @@ func isArkSeedanceVideo(channel model.ModelChannel, modelName string) bool {
 	if isFlatkeyChannel(channel) {
 		return false
 	}
-	// 后台渠道显式选择「火山方舟（Ark）」协议时直接命中，不必再猜接口地址。
-	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark") {
+	// 后台渠道显式选择「火山方舟（Ark）」或「灵智」协议时直接命中，不必再猜接口地址。
+	// 灵智是 Ark 的一种方言，任务路径同样是 /contents/generations/tasks。
+	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "ark") || strings.EqualFold(strings.TrimSpace(channel.Protocol), "anmiao") {
 		return true
 	}
 	base := strings.ToLower(strings.TrimRight(strings.TrimSpace(channel.BaseURL), "/"))

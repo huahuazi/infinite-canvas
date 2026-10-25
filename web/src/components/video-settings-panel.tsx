@@ -4,7 +4,7 @@ import { type CSSProperties, type ReactNode } from "react";
 import { Input, Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
-import { boolConfig, isAnmiaoBaseUrl, isSeedance25Model, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationMax, seedanceDurationOptionsFor, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
+import { boolConfig, isAnmiaoChannel, isSeedance25Model, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationMax, seedanceDurationOptionsFor, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { COGVIDEOX3_DURATIONS, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { activeChannelForConfig, channelIdForActiveModel, channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
@@ -286,9 +286,11 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
     const resolution = normalizeSeedanceResolution(config.vquality, model);
     const ratio = normalizeSeedanceRatio(config.size);
     // 按秒计费渠道（灵智 anmiao）不接受 -1 智能时长，选项与下限都要去掉。
-    const anmiao = isAnmiaoBaseUrl(channelBaseUrlForConfig(config));
-    const duration = normalizeSeedanceDuration(config.videoSeconds, model, channelBaseUrlForConfig(config));
-    const durationOptions = seedanceDurationOptionsFor(model, channelBaseUrlForConfig(config));
+    const channelProtocol = channelProtocolForConfig(config);
+    const channelBaseUrl = channelBaseUrlForConfig(config);
+    const anmiao = isAnmiaoChannel(channelProtocol, channelBaseUrl);
+    const duration = normalizeSeedanceDuration(config.videoSeconds, model, channelBaseUrl, channelProtocol);
+    const durationOptions = seedanceDurationOptionsFor(model, channelBaseUrl, channelProtocol);
     const durationMax = seedanceDurationMax(model);
     const durationMin = anmiao ? 4 : -1;
     const watermark = boolConfig(config.videoWatermark, false);

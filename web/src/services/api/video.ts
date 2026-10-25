@@ -4,7 +4,7 @@ import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
-import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isAnmiaoBaseUrl, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
+import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isAnmiaoChannel, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
@@ -51,8 +51,9 @@ function aiApiUrl(config: AiConfig, path: string) {
 function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
     const protocol = channelProtocolForConfig(config);
     if (protocol === "kie" || protocol === "apimart" || protocol === "grok2api") return false;
-    // 后台渠道显式选择「火山方舟（Ark）」协议时直接判定，不必再猜接口地址。
-    if (protocol === "ark") return true;
+    // 后台渠道显式选择「火山方舟（Ark）」或「灵智」协议时直接判定，不必再猜接口地址。
+    // 灵智是 Ark 的一种方言，任务路径同样是 /contents/generations/tasks。
+    if (protocol === "ark" || protocol === "anmiao") return true;
     const channel = activeChannelForConfig(config);
     const baseUrl = channel?.baseUrl || config.baseUrl || "";
     // Flatkey 的视频任务协议与 Ark 同构（content[] 请求体 + 任务式轮询），复用 Ark 的请求体与响应解析；
@@ -282,8 +283,8 @@ async function cacheProtectedArkVideo(config: AiConfig, model: string, task: Vid
     const url = task.video_url || task.url || "";
     if (!isCompletedVideoStatus(task.status) || task.storageKey || !isArkSeedanceVideoRequest(config, model)) return task;
     if (!/^https?:\/\//i.test(url)) return task;
-    const channelBaseUrl = activeChannelForConfig(config)?.baseUrl || config.baseUrl || "";
-    if (isAnmiaoBaseUrl(channelBaseUrl)) return task;
+    const channel = activeChannelForConfig(config);
+    if (isAnmiaoChannel(channel?.protocol, channel?.baseUrl || config.baseUrl || "")) return task;
     try {
         const media = await uploadRemoteMediaToServer(url, `ark-video-${task.id || Date.now()}.mp4`);
         return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
@@ -841,7 +842,7 @@ async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string
     // 提前拦下并给可操作的提示，而不是让上游返回一个看不懂的错。
     const channel = activeChannelForConfig(config);
     const channelBaseUrl = channel?.baseUrl || config.baseUrl || "";
-    const anmiao = isAnmiaoBaseUrl(channelBaseUrl);
+    const anmiao = isAnmiaoChannel(channel?.protocol, channelBaseUrl);
     if (anmiao) {
         const allRefs = [input.firstFrame, input.lastFrame, ...input.references, ...input.videoReferences, ...input.audioReferences];
         if (allRefs.filter((item): item is NonNullable<typeof item> => Boolean(item)).some((item) => hasArkAssetReference(item))) {

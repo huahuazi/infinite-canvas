@@ -82,8 +82,8 @@ export function isSeedance25Model(model: string) {
 }
 
 // 传 baseUrl 时，按秒渠道返回「4 秒到上限的每一个整数秒」（不含 -1）。
-export function seedanceDurationOptionsFor(model: string, baseUrl?: string) {
-    if (baseUrl && isAnmiaoBaseUrl(baseUrl)) {
+export function seedanceDurationOptionsFor(model: string, baseUrl?: string, protocol?: string) {
+    if (isAnmiaoChannel(protocol, baseUrl || "")) {
         const limits = lingzhiAnmiaoLimitsFor(model);
         return integerSeconds(limits.durationMin, limits.durationMax);
     }
@@ -187,8 +187,22 @@ export function isAnmiaoBaseUrl(baseUrl: string) {
     return /\/api\/v3\/anmiao(?:\/|$)/i.test(String(baseUrl || "").trim());
 }
 
-// 按秒计费渠道不接受 duration=-1，需要收敛成具体秒数。
-export function isAnmiaoChannelConfig(baseUrl: string) {
+// 灵智协议的显式标识。灵智是火山方舟 Ark 的一种方言：
+// 任务接口与请求体结构完全同 Ark，差异在 model 名、duration 约束、素材引用与产物地址。
+export function isAnmiaoProtocol(protocol?: string) {
+    return String(protocol || "").trim().toLowerCase() === "anmiao";
+}
+
+/**
+ * 判断当前渠道是否为灵智按秒计费通道。
+ * 判定顺序：显式 protocol 优先，其次按 Base URL 兜底。
+ * 兜底只对「没声明协议」或「声明为 ark」的渠道生效——
+ * 用户显式选了别的协议时，不该被地址反向覆盖。
+ */
+export function isAnmiaoChannel(protocol: string | undefined, baseUrl: string) {
+    if (isAnmiaoProtocol(protocol)) return true;
+    const declared = String(protocol || "").trim().toLowerCase();
+    if (declared && declared !== "ark") return false;
     return isAnmiaoBaseUrl(baseUrl);
 }
 
@@ -257,10 +271,10 @@ export function normalizeResolutionToken(value: string) {
     return `${resolution}p`;
 }
 
-export function normalizeSeedanceDuration(value: string, model = "", baseUrl = "") {
+export function normalizeSeedanceDuration(value: string, model = "", baseUrl = "", protocol?: string) {
     // 按秒计费渠道（灵智 anmiao）不接受 -1，传上去会被上游 400，这里直接落到默认秒数。
     if (String(value).trim() === "-1") {
-        return baseUrl && isAnmiaoBaseUrl(baseUrl) ? ANMIAO_FALLBACK_DURATION : -1;
+        return isAnmiaoChannel(protocol, baseUrl) ? ANMIAO_FALLBACK_DURATION : -1;
     }
     const seconds = Math.floor(Number(value) || 5);
     return Math.max(4, Math.min(seedanceDurationMax(model), seconds));
