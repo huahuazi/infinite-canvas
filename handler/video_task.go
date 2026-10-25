@@ -83,11 +83,25 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		credits *= readAIRequestCount(body, contentType)
 	}
 	upstreamPath := resolveAIProxyPath(channel, modelName, "/videos")
+	// 灵智的文档站（lk666.ai）只托管网页，任何 /api 请求都会返回 200 + HTML，
+	// 提前拦下并说明正确的 API 域名，否则现场只剩一句「视频接口没有返回任务 ID」。
+	if service.IsLingzhiDocHost(channel.BaseURL) {
+		Fail(w, "当前渠道地址指向灵智文档站（lk666.ai），它不提供 API。请把 Base URL 改成 https://api.lk888.ai/api/v3/anmiao 或 https://api.lingkeai.ai/api/v3/anmiao")
+		return
+	}
 	body, contentType, err = normalizeVideoCreateBody(body, contentType, modelName, channel, upstreamPath)
 	if err != nil {
 		log.Printf("AI video normalize request failed: model=%s err=%v", modelName, err)
 		Fail(w, "AI 接口请求失败")
 		return
+	}
+	// 灵智 Ark 通道只认火山真名，发它自己的计费 SKU 会被上游拒掉；
+	// 这里在本地就给出「去哪配映射」的提示，省一轮 400 排查。
+	if service.IsAnmiaoChannel(channel) {
+		if hint := service.AnmiaoModelNameError(readBodyModelName(body)); hint != "" {
+			Fail(w, hint)
+			return
+		}
 	}
 	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
 	if err != nil {
@@ -161,7 +175,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		ChannelName:     channel.Name,
 		Source:          readVideoTaskSource(r),
 		SourceID:        readVideoTaskSourceID(r),
-		ClientTaskID:     readClientVideoTaskID(r),
+		ClientTaskID:    readClientVideoTaskID(r),
 		UpstreamTaskID:  parsed.UpstreamTaskID,
 		UpstreamVideoID: parsed.UpstreamVideoID,
 		Status:          parsed.Status,
@@ -349,7 +363,7 @@ func normalizeVideoCreateBody(body []byte, contentType string, modelName string,
 		normalized, err := service.StripGeminiModelField(body, contentType)
 		return normalized, contentType, err
 	}
-	return rewriteModelChannelRequestBody(body, contentType, channel, func(body []byte) ([]byte, string, error) {
+	return rewriteModelChannelRequestBody(body, contentType, channel, modelName, func(body []byte) ([]byte, string, error) {
 		if isKIEChannel(channel, modelName) && upstreamPath == "/jobs/createTask" {
 			return normalizeKIEVideoBody(body, contentType, modelName, channel)
 		}

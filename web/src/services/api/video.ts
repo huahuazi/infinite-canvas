@@ -10,6 +10,7 @@ import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3D
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { activeChannelForConfig, buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
+import { useMediaMirrorStore } from "@/stores/use-media-mirror-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -287,9 +288,15 @@ async function cacheProtectedArkVideo(config: AiConfig, model: string, task: Vid
         const media = await uploadRemoteMediaToServer(url, `ark-video-${task.id || Date.now()}.mp4`);
         return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
     } catch (error) {
-        // 存储未启用或转存失败时保留原始地址，并提示用户链接的有效期限制。
-        console.warn("火山方舟产物转存失败，原始链接仅 24 小时有效，请及时下载：", error);
-        return task;
+        // 本地存储未启用或转存失败：火山原生链接只有 24 小时有效，
+        // 退一步镜像到公共托管，至少保证用户手里的链接不会过期。
+        try {
+            const mirrored = await mirrorPublicMediaUrl(url, `ark-video-${task.id || Date.now()}.mp4`);
+            return { ...task, url: mirrored, video_url: mirrored };
+        } catch (mirrorError) {
+            console.warn("火山方舟产物转存失败，原始链接仅 24 小时有效，请及时下载：", error, mirrorError);
+            return task;
+        }
     }
 }
 
@@ -822,6 +829,10 @@ function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: 
 async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
     const hasFrames = Boolean(input.firstFrame || input.lastFrame);
     const hasReferences = Boolean(input.references.length || input.videoReferences.length || input.audioReferences.length);
+    // 灵智 / 火山同一口径：last_frame 必须与 first_frame 同传，只给尾帧会被上游 400。
+    if (input.lastFrame && !input.firstFrame) {
+        throw new VideoRequestError("尾帧必须与首帧一起提交：请补充首帧图片，或移除尾帧");
+    }
     // 官方约束：图生视频-首帧/首尾帧 与 全模态参考生视频（参考图/视频/音频）是互斥场景，不可混用。
     if (hasFrames && hasReferences) {
         throw new VideoRequestError("火山方舟的首尾帧模式与参考素材模式互斥，请只保留首帧/尾帧，或只保留参考图、参考视频、参考音频");
@@ -858,6 +869,11 @@ async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string
         if ((input.videoReferences.length || input.audioReferences.length) && !supportsArkReferenceMedia(model)) {
             throw new VideoRequestError("参考视频/参考音频仅 Seedance 2.5 / 2.0 系列支持");
         }
+        // 灵智文档：2.0 按秒「不支持仅传音频，需搭配参考图或参考视频」，2.5 才支持仅音频生成。
+        // 提前拦下，否则上游只会回一句强校验失败的 400。
+        if (!input.references.length && !input.videoReferences.length && input.audioReferences.length && !isArkSeedance25Model(model)) {
+            throw new VideoRequestError("当前 Seedance 模型不支持只传参考音频，请补充参考图或参考视频，或改用 Seedance 2.5 系列");
+        }
         for (const video of input.videoReferences.slice(0, arkReferenceVideoLimit(model))) {
             content.push({ type: "video_url", video_url: { url: await arkReferenceVideoUrl(video) }, role: "reference_video" });
         }
@@ -885,7 +901,9 @@ async function createArkSeedanceVideoRequestBody(config: AiConfig, model: string
     // 灵智按秒通道已在 normalizeSeedanceDuration 里把 -1 收敛成具体秒数。
     if (!(isFlatkeyVideoRequest(config) && duration === -1)) body.duration = duration;
     const taskType = arkTaskType(config, input);
-    if (taskType) body.omni_reference_task_type = taskType;
+    // omni_reference_task_type 是火山官方字段；灵智的接入文档里没有这个参数
+    // （模式由 content[].role 自动判定），本地直连时不要发，免得被强校验拒掉。
+    if (!anmiao && taskType) body.omni_reference_task_type = taskType;
     // 以下均为可选参数，只在用户显式启用时才写入。
     // 官方对参数是强校验，未启用就不传，避免旧模型（1.0 / 1.5）收到不支持的字段直接报错。
     // 灵智按秒通道对 seed / watermark / generate_audio / service_tier 等一律「收下但不生效」，
@@ -990,7 +1008,7 @@ async function arkReferenceImageUrl(image: ReferenceImage) {
     // 本地图片：优先转存成公网地址；失败再内联 Base64（官方允许，单张需 < 30MB）。
     const dataUrl = await imageToDataUrl(image);
     const file = await dataUrlToFile({ ...image, dataUrl });
-    const uploaded = await uploadArkReferenceToPublicUrl(file, file.name || "reference.png").catch(() => "");
+    const uploaded = await uploadArkReferenceToPublicUrl(file, file.name || "reference.png", false).catch(() => "");
     if (uploaded) return uploaded;
     if (dataUrl.length >= ARK_REQUEST_BODY_LIMIT) {
         throw new VideoRequestError("图片过大无法内联传给火山方舟：请在后端配置 PUBLIC_BASE_URL 走公网素材，或把图片压到 30MB 以内");
@@ -1010,7 +1028,7 @@ async function arkReferenceVideoUrl(video: ReferenceVideo) {
     if (!response || !response.ok) throw new VideoRequestError("参考视频读取失败，请重新上传后再试");
     const blob = await response.blob();
     try {
-        return await uploadArkReferenceToPublicUrl(blob, video.name || `reference-${Date.now()}.mp4`);
+        return await uploadArkReferenceToPublicUrl(blob, video.name || `reference-${Date.now()}.mp4`, true);
     } catch (error) {
         const reason = error instanceof Error && error.message ? error.message : "转存失败";
         throw new VideoRequestError(`火山方舟的参考视频必须使用公网地址（官方不支持视频 Base64 内联）：${reason}`);
@@ -1028,7 +1046,7 @@ async function arkReferenceAudioUrl(audio: ReferenceAudio) {
     const response = await fetch(resolvedUrl || audio.url).catch(() => null);
     if (!response || !response.ok) throw new VideoRequestError("参考音频读取失败，请重新上传后再试");
     const blob = await response.blob();
-    const uploaded = await uploadArkReferenceToPublicUrl(blob, audio.name || `reference-${Date.now()}.mp3`).catch(() => "");
+    const uploaded = await uploadArkReferenceToPublicUrl(blob, audio.name || `reference-${Date.now()}.mp3`, false).catch(() => "");
     if (uploaded) return uploaded;
     if (blob.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes) {
         throw new VideoRequestError("参考音频超过 15MB 无法内联，请在后端配置 PUBLIC_BASE_URL 改用公网素材");
@@ -1053,8 +1071,31 @@ function blobToArkDataUrl(blob: Blob, fallbackMimeType: string) {
 }
 
 // 火山方舟在生成阶段会主动回源拉取参考素材，本地文件必须先变成公网可访问地址。
-// 后端 /api/v1/media/references 正是为火山方舟准备的公网素材出口。
-async function uploadArkReferenceToPublicUrl(blob: Blob, filename: string) {
+// 首选后端 /api/v1/media/references（数据留在自己服务器）；
+// 该出口不可用（未配 PUBLIC_BASE_URL、只有 IPv6、上行打满）时，
+// 自动兜底到公共文件托管换一条直链，全程对用户无感。
+async function uploadArkReferenceToPublicUrl(blob: Blob, filename: string, allowPublicMirror: boolean) {
+    const mirror = useMediaMirrorStore.getState();
+    mirror.begin("正在为参考素材准备公网地址…");
+    try {
+        const selfHosted = await uploadReferenceToSelfHosted(blob, filename).catch((error) => {
+            console.warn("本机素材出口不可用：", error);
+            if (allowPublicMirror) {
+                mirror.update("本机素材出口不可用，正在改用公共直链（catbox / 0x0.st / litterbox / tmpfiles）…");
+            }
+            return "";
+        });
+        if (selfHosted) return selfHosted;
+        // 只有视频必须走公网直链（协议不支持 Base64）；图片 / 音频仍由调用方退回 Base64，
+        // 不把可内联的素材也推到公开托管上。
+        if (!allowPublicMirror) throw new Error("本机素材出口不可用，已回退到内联提交");
+        return await mirrorPublicMediaBlob(blob, filename);
+    } finally {
+        mirror.end();
+    }
+}
+
+async function uploadReferenceToSelfHosted(blob: Blob, filename: string) {
     const token = useUserStore.getState().token;
     const formData = new FormData();
     formData.append("file", blob, filename);
@@ -1071,6 +1112,36 @@ async function uploadArkReferenceToPublicUrl(blob: Blob, filename: string) {
     // PUBLIC_BASE_URL 若填的是本机或内网地址，火山方舟同样回源不到，这里提前拦下并说明原因。
     if (!url) throw new Error("PUBLIC_BASE_URL 不是公网可访问地址，火山方舟无法回源拉取参考素材");
     return url;
+}
+
+// 公共托管兜底：后端按 PUBLIC_MIRROR_PROVIDERS 的顺序依次尝试，任一成功即返回直链。
+async function mirrorPublicMediaBlob(blob: Blob, filename: string) {
+    const formData = new FormData();
+    formData.append("file", blob, filename);
+    return postPublicMirror(formData);
+}
+
+// 生成产物兜底：让后端直接去拉上游地址再转存，避免浏览器二次下载。
+async function mirrorPublicMediaUrl(url: string, filename: string) {
+    return postPublicMirror(JSON.stringify({ url, filename }), "application/json");
+}
+
+async function postPublicMirror(body: FormData | string, contentType?: string) {
+    const token = useUserStore.getState().token;
+    if (!token) throw new Error("公共直链需要登录后使用");
+    const response = await fetch("/api/v1/media/public-mirror", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`,
+            ...(contentType ? { "Content-Type": contentType } : {}),
+        },
+        body,
+    });
+    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: { url?: string } } | null;
+    if (!response.ok || payload?.code !== 0 || !payload.data?.url) {
+        throw new Error(payload?.msg || `公共直链转存失败：${response.status}`);
+    }
+    return payload.data.url;
 }
 
 // 参考图 / 参考视频 / 参考音频（全模态参考生视频）仅 Seedance 2.5 与 2.0 系列支持。
@@ -1211,9 +1282,9 @@ const videoErrorHints: Array<{ pattern: RegExp; hint: string }> = [
     { pattern: /real person|PrivacyInformation/i, hint: "火山方舟不允许含真人人脸的参考素材。" },
     { pattern: /asset.{0,24}(not.{0,10}(found|exist)|invalid|expired|unauthorized|forbidden|permission|access denied)/i, hint: "素材库引用异常：请确认素材与当前渠道的 API Key 属于同一火山账号、素材 ID 填写完整（asset://asset-xxx），且授权仍在有效期内。" },
     { pattern: /SensitiveContent/i, hint: "素材触发了内容安全审核，请更换素材后重试。" },
-    { pattern: /quota|insufficient|balance|arrears/i, hint: "账户额度或余额不足，请到火山控制台确认模型已开通并有可用余额。" },
-    { pattern: /AuthenticationError|invalid.{0,12}api.?key/i, hint: "API Key 无效或未授权，请在渠道配置里更新火山方舟 API Key。" },
-    { pattern: /ModelNotOpen|not activated|InvalidModel|model.{0,14}not.{0,14}(found|exist)/i, hint: "模型不可用：请确认该模型已在火山控制台开通，且模型 ID 填写正确。" },
+    { pattern: /quota|insufficient|balance|arrears/i, hint: "账户额度或余额不足，请到渠道控制台确认模型已开通、线路有余额。" },
+    { pattern: /(invalid|missing).{0,12}api.?key|AuthenticationError/i, hint: "API Key 无效或未携带，请在后台渠道配置里更新该渠道的 sk- 密钥。" },
+    { pattern: /ModelNotOpen|not activated|InvalidModel|model.{0,14}not.{0,14}(found|exist)/i, hint: "模型不可用：请确认模型 ID 正确，且渠道的「模型名映射」把平台 SKU 映射成了上游真名（灵智需映射成 doubao-*）。" },
     { pattern: /content.{0,24}(type|format).{0,24}(not|invalid)|Unsupported/i, hint: "素材格式不被支持，请检查格式与体积是否符合火山方舟要求。" },
     // 必须加单词边界：旧写法让 /ratio/ 命中了 "gene(ratio)ns"，导致「通道不支持该接口」也被误判成参数越界。
     { pattern: /\b(?:resolution|ratio|duration)\b/i, hint: "参数超出该模型允许范围，请调整时长 / 分辨率 / 比例。" },

@@ -277,3 +277,71 @@ func upstreamModelNameForTest(channel model.ModelChannel, modelName string) stri
 	name, _ := payload["model"].(string)
 	return name
 }
+
+// duration 超过灵智按秒通道的上限时收敛：2.5 为 30 秒，2.0 为 15 秒。
+func TestAnmiaoClampsDurationUpperBound(t *testing.T) {
+	cases := []struct {
+		name     string
+		alias    string
+		upstream string
+		duration string
+		want     float64
+	}{
+		{"2.5 超上限", "seedance-2.5-guanfang-anmiao", "doubao-seedance-2-5-260628", "60", 30},
+		{"2.0 超上限", "seedance-2.0-guanfang-anmiao", "doubao-seedance-2-0-260128", "20", 15},
+		{"低于下限", "seedance-2.5-guanfang-anmiao", "doubao-seedance-2-5-260628", "1", 4},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			channel := anmiaoChannel()
+			channel.Models = []string{item.alias}
+			channel.ModelAliases = map[string]string{item.alias: item.upstream}
+			body := []byte(`{"model":"` + item.alias + `","duration":` + item.duration + `}`)
+			normalized, _, err := normalizeVideoCreateBody(body, "application/json", item.alias, channel, "/contents/generations/tasks")
+			if err != nil {
+				t.Fatalf("改写请求体失败: %v", err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(normalized, &payload); err != nil {
+				t.Fatalf("解析改写后的请求体失败: %v", err)
+			}
+			if got := payload["duration"]; got != item.want {
+				t.Fatalf("duration = %v，期望收敛为 %v", got, item.want)
+			}
+		})
+	}
+}
+
+// duration 缺失时补默认值：文档把它标成必填，缺了上游会直接 400。
+func TestAnmiaoFillsMissingDuration(t *testing.T) {
+	channel := anmiaoChannel()
+	body := []byte(`{"model":"seedance-2.5-guanfang-anmiao","content":[{"type":"text","text":"x"}]}`)
+	normalized, _, err := normalizeVideoCreateBody(body, "application/json", "seedance-2.5-guanfang-anmiao", channel, "/contents/generations/tasks")
+	if err != nil {
+		t.Fatalf("改写请求体失败: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		t.Fatalf("解析改写后的请求体失败: %v", err)
+	}
+	if got := payload["duration"]; got != float64(anmiaoDefaultDurationSeconds) {
+		t.Fatalf("duration = %v，期望补成 %d", got, anmiaoDefaultDurationSeconds)
+	}
+}
+
+// 小数秒不是合法整数，必须截断，否则上游强校验会拒。
+func TestAnmiaoTruncatesFloatDuration(t *testing.T) {
+	channel := anmiaoChannel()
+	body := []byte(`{"model":"seedance-2.5-guanfang-anmiao","duration":8.7}`)
+	normalized, _, err := normalizeVideoCreateBody(body, "application/json", "seedance-2.5-guanfang-anmiao", channel, "/contents/generations/tasks")
+	if err != nil {
+		t.Fatalf("改写请求体失败: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		t.Fatalf("解析改写后的请求体失败: %v", err)
+	}
+	if got := payload["duration"]; got != float64(8) {
+		t.Fatalf("duration = %v，期望截断成 8", got)
+	}
+}

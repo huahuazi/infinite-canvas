@@ -32,20 +32,60 @@ export const seedanceDurationOptions = [-1, 4, 5, 6, 8, 10, 12, 15] as const;
 // Seedance 2.5 支持 30 秒连贯直出，其余模型上限 15 秒。
 export const seedance25DurationOptions = [-1, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30] as const;
 
-// 按秒计费渠道（灵智 anmiao）不接受 -1 智能时长，界面里要去掉这个选项，
-// 免得用户选了之后到上游才收到 400。
-export const seedance25FixedDurationOptions = [4, 5, 6, 8, 10, 12, 15, 20, 25, 30] as const;
-export const seedanceFixedDurationOptions = [4, 5, 6, 8, 10, 12, 15] as const;
+// 按秒计费渠道（灵智 anmiao）不接受 -1 智能时长，且文档给的是「4 秒到上限的每一个整数秒」，
+// 不是离散档位 —— 写死成 [4,5,6,8,10,12,15] 会让用户选不到 7/9/11…29 秒。
+function integerSeconds(min: number, max: number) {
+    return Array.from({ length: Math.max(0, max - min + 1) }, (_, index) => min + index);
+}
+
+export const seedance25FixedDurationOptions = integerSeconds(4, 30); // 4~30
+export const seedanceFixedDurationOptions = integerSeconds(4, 15); // 4~15
+
+// 灵智按秒通道的素材与参数限制，逐条对齐接入文档
+// https://lingzhiai.lk666.ai/apidoc#model/seedance-2.5-guanfang-anmiao
+// 2.5：参考图 0~30、参考视频 0~10（单个 2~30 秒、总 ≤30 秒）、参考音频 0~10（总 ≤30 秒）、时长 4~30 秒
+// 2.0：参考图 0~9、参考视频 0~3（单个 2~15 秒、总 ≤15 秒）、参考音频 0~3（总 ≤15 秒）、时长 4~15 秒
+export const lingzhiAnmiao25Limits = {
+    images: 30,
+    videos: 10,
+    audios: 10,
+    videoMinSeconds: 2,
+    videoMaxSeconds: 30,
+    videoTotalSeconds: 30,
+    audioTotalSeconds: 30,
+    durationMin: 4,
+    durationMax: 30,
+    resolutions: ["480p", "720p", "1080p"],
+} as const;
+
+export const lingzhiAnmiao20Limits = {
+    images: 9,
+    videos: 3,
+    audios: 3,
+    videoMinSeconds: 2,
+    videoMaxSeconds: 15,
+    videoTotalSeconds: 15,
+    audioTotalSeconds: 15,
+    durationMin: 4,
+    durationMax: 15,
+    // 文档另支持 4K，但画布的分辨率选择器对所有渠道统一只到 1080p，这里不放开以免误判能力。
+    resolutions: ["480p", "720p", "1080p"],
+} as const;
+
+export function lingzhiAnmiaoLimitsFor(model: string) {
+    return isSeedance25Model(model) ? lingzhiAnmiao25Limits : lingzhiAnmiao20Limits;
+}
 
 export function isSeedance25Model(model: string) {
     const value = String(model || "").toLowerCase();
     return value.includes("seedance-2-5") || value.includes("seedance-2.5");
 }
 
-// 传 baseUrl 时，按秒渠道返回不含 -1 的时长选项。
+// 传 baseUrl 时，按秒渠道返回「4 秒到上限的每一个整数秒」（不含 -1）。
 export function seedanceDurationOptionsFor(model: string, baseUrl?: string) {
     if (baseUrl && isAnmiaoBaseUrl(baseUrl)) {
-        return isSeedance25Model(model) ? seedance25FixedDurationOptions : seedanceFixedDurationOptions;
+        const limits = lingzhiAnmiaoLimitsFor(model);
+        return integerSeconds(limits.durationMin, limits.durationMax);
     }
     return isSeedance25Model(model) ? seedance25DurationOptions : seedanceDurationOptions;
 }
@@ -280,14 +320,19 @@ export function buildSeedancePromptText(prompt: string, images: ReferenceImage[]
     return `参考素材编号：${labels.join("、")}。请按这些编号理解提示词中的图片、视频和音频引用。\n\n${text}`;
 }
 
-export function seedanceVideoReferenceError(videos: ReferenceVideo[]) {
+export function seedanceVideoReferenceError(videos: ReferenceVideo[], model = "") {
+    // 参考视频时长上限跟着型号走：Seedance 2.5 单个 2~30 秒、总 ≤30 秒；
+    // 2.0 / 1.5 / 1.0 是单个 2~15 秒、总 ≤15 秒。写死 15 秒会把 2.5 允许的素材提前拦掉。
+    const limits = lingzhiAnmiaoLimitsFor(model);
+    const maxSeconds = isSeedance25Model(model) ? limits.videoMaxSeconds : 15;
+    const totalSeconds = isSeedance25Model(model) ? limits.videoTotalSeconds : 15;
     let totalDurationMs = 0;
     for (let index = 0; index < videos.length; index += 1) {
         const video = videos[index];
         const label = seedanceReferenceLabel("video", index);
         if (video.bytes && video.bytes > SEEDANCE_REFERENCE_LIMITS.videoMaxBytes) return `${label} 超过 50MB，请压缩后再上传`;
         if (video.durationMs) {
-            if (video.durationMs < 2000 || video.durationMs > 15000) return `${label} 时长需要在 2-15 秒之间`;
+            if (video.durationMs < 2000 || video.durationMs > maxSeconds * 1000) return `${label} 时长需要在 2-${maxSeconds} 秒之间`;
             totalDurationMs += video.durationMs;
         }
         if (video.width && video.height) {
@@ -298,8 +343,8 @@ export function seedanceVideoReferenceError(videos: ReferenceVideo[]) {
             if (pixels < 640 * 640 || pixels > 2206 * 946) return `${label} 像素总量不符合 Seedance 要求，请转成 480p/720p/1080p 后再上传`;
         }
     }
-    if (totalDurationMs > 15000) return "Seedance 参考视频总时长不能超过 15 秒";
+    if (totalDurationMs > totalSeconds * 1000) return `Seedance 参考视频总时长不能超过 ${totalSeconds} 秒`;
     return "";
 }
 
-export const seedanceVideoReferenceHint = "参考视频需为 mp4/mov，H.264/H.265，FPS 24-60；含真人人脸素材请使用火山授权 asset:// 素材。";
+export const seedanceVideoReferenceHint = "参考视频需为 mp4/mov，H.264/H.265，FPS 24-60；含真人人脸素材需使用火山授权 asset:// 素材（灵智等中转通道不支持素材库引用，请改用非真人素材）。";

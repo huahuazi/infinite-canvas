@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/huahuazi/infinite-canvas"><img src="https://img.shields.io/github/stars/huahuazi/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
-  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.8.3-2563eb?style=flat-square" alt="Version"></a>
+  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.9.0-2563eb?style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f97316?style=flat-square" alt="License"></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white" alt="Docker ready"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16.2-000000?style=flat-square&logo=nextdotjs" alt="Next.js"></a>
@@ -172,8 +172,18 @@ claude mcp add infinite-canvas -- infinite-canvas-agent mcp
 | 部署方式 | `PUBLIC_BASE_URL` | 参考视频可用 |
 | --- | --- | --- |
 | 公网服务器 / 已绑域名 | `https://your-domain.com` | ✅ |
-| 本机或内网跑 | 填了也无效（火山回源不到内网地址） | ❌ 需要内网穿透，或改用公网对象存储的地址 |
-| 未配置 | — | ❌ 会明确提示「未配置 PUBLIC_BASE_URL」 |
+| 本机或内网跑 | 填了也无效（火山回源不到内网地址） | ⚠️ 会自建出口失败后自动改走公共直链镜像（见下） |
+| 未配置 | — | ⚠️ 自动改走公共直链镜像 |
+
+**公共直链镜像（兜底，默认开启 fallback）**：当自建素材出口不可用时，后端会把素材按顺序转存到公共文件托管，拿到直链后交给上游，全程对用户无感；上传中会在结果卡片显示「正在为参考素材准备公网地址…」，全部失败时会列出每个托管的原因。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PUBLIC_MIRROR_MODE` | `fallback` | `fallback` 仅在自建出口失败时兜底；`off` 完全关闭 |
+| `PUBLIC_MIRROR_PROVIDERS` | `catbox,0x0st,litterbox,tmpfiles` | 按顺序尝试，任一成功即返回；未知名字会被忽略 |
+| `PUBLIC_MIRROR_RESULTS` | `false` | 生成结果（成片）是否也镜像到公共托管；仅在本地存储不可用、又需要保活 24 小时链接时打开 |
+
+> ⚠️ 这些托管服务是**公开可读**的，素材一旦上传就等于公开。客户素材、未发布素材请保持 `PUBLIC_MIRROR_MODE=off`，改用自有域名或私有对象存储（签名 URL）。
 
 注意：**参考图与参考音频不受此限制**，本地文件会内联 Base64 直接提交，本机开发也能正常做图生视频。
 

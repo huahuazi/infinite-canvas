@@ -19,6 +19,8 @@
 - [系统配置数据结构](backend/system-settings.md)
 - [后端数据库说明](backend/backend-database.md)
 - [画布数据结构](backend/canvas-data-structure.md)
+- [灵智 AI（Anmiao 按秒通道）对接对照](lingzhi-anmiao.md)
+- [参考视频输入源：限制、影响与方案选型](reference-video-source.md)
 
 ## 商务合作
 

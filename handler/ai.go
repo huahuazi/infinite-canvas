@@ -150,6 +150,11 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		credits *= readAIRequestCount(body, contentType)
 	}
 	upstreamPath := resolveAIProxyPath(channel, modelName, path)
+	// 灵智文档站不提供 API（返回 HTML 200），在代理层直接给出可操作的提示。
+	if service.IsLingzhiDocHost(channel.BaseURL) {
+		Fail(w, "当前渠道地址指向灵智文档站（lk666.ai），它不提供 API。请把 Base URL 改成 https://api.lk888.ai/api/v3/anmiao 或 https://api.lingkeai.ai/api/v3/anmiao")
+		return
+	}
 	if service.IsGeminiChannel(channel) {
 		if path == "/chat/completions" && !geminiStreamRequested(body) {
 			upstreamPath = service.GeminiModelActionPath(modelName, "generateContent")
@@ -409,13 +414,28 @@ func readUpstreamAIErrorMessage(body []byte, statusCode int) string {
 	var payload struct {
 		Error *struct {
 			Message string `json:"message"`
+			Code    any    `json:"code"`
+			Type    string `json:"type"`
 		} `json:"error"`
 		Msg     string `json:"msg"`
 		Message string `json:"message"`
 	}
 	if len(body) > 0 && json.Unmarshal(body, &payload) == nil {
-		if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
-			return payload.Error.Message
+		message := ""
+		if payload.Error != nil {
+			message = strings.TrimSpace(payload.Error.Message)
+			// 灵智等中转站的错误信封带机器码（invalid_api_key / model_not_found），
+			// 只回传 message 会让用户分不清该改密钥、改模型名还是改地址，
+			// 命中已知码时补一句可操作的中文提示。
+			if hint := service.LingzhiErrorHint(fmt.Sprint(payload.Error.Code), payload.Error.Type); hint != "" && !strings.Contains(message, hint) {
+				if message == "" {
+					return hint
+				}
+				message = message + "\n\n（" + hint + "）"
+			}
+		}
+		if message != "" {
+			return message
 		}
 		if strings.TrimSpace(payload.Msg) != "" {
 			return payload.Msg

@@ -74,6 +74,7 @@ func New() *gin.Engine {
 		handler.DeleteUserVideoTask(c.Writer, c.Request, c.Param("id"))
 	})
 	v1.POST("/media/references", gin.WrapF(handler.UploadReferenceMedia))
+	v1.POST("/media/public-mirror", gin.WrapF(handler.UploadPublicMirror))
 	v1.GET("/videos/:id", func(c *gin.Context) {
 		handler.AIVideo(c.Writer, c.Request, c.Param("id"))
 	})

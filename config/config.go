@@ -12,14 +12,20 @@ import (
 )
 
 type Config struct {
-	Port                string `env:"PORT" envDefault:"8080"`
-	AdminUsername       string `env:"ADMIN_USERNAME" envDefault:"admin"`
-	AdminPassword       string `env:"ADMIN_PASSWORD" envDefault:"infinite-canvas"`
-	JWTSecret           string `env:"JWT_SECRET" envDefault:"infinite-canvas"`
-	JWTExpireHours      int    `env:"JWT_EXPIRE_HOURS" envDefault:"168"`
-	StorageDriver       string `env:"STORAGE_DRIVER" envDefault:"sqlite"`
-	DatabaseDSN         string `env:"DATABASE_DSN" envDefault:"data/infinite-canvas.db"`
-	PublicBaseURL       string `env:"PUBLIC_BASE_URL"`
+	Port           string `env:"PORT" envDefault:"8080"`
+	AdminUsername  string `env:"ADMIN_USERNAME" envDefault:"admin"`
+	AdminPassword  string `env:"ADMIN_PASSWORD" envDefault:"infinite-canvas"`
+	JWTSecret      string `env:"JWT_SECRET" envDefault:"infinite-canvas"`
+	JWTExpireHours int    `env:"JWT_EXPIRE_HOURS" envDefault:"168"`
+	StorageDriver  string `env:"STORAGE_DRIVER" envDefault:"sqlite"`
+	DatabaseDSN    string `env:"DATABASE_DSN" envDefault:"data/infinite-canvas.db"`
+	PublicBaseURL  string `env:"PUBLIC_BASE_URL"`
+	// 公共直链镜像：自建出口不可用时，把素材转存到公共文件托管换一条上游能拉的直链。
+	// PUBLIC_MIRROR_MODE：off（关闭）/ fallback（默认，仅自建出口失败时兜底）。
+	PublicMirrorProviders string `env:"PUBLIC_MIRROR_PROVIDERS" envDefault:"catbox,0x0st,litterbox,tmpfiles"`
+	PublicMirrorMode      string `env:"PUBLIC_MIRROR_MODE" envDefault:"fallback"`
+	// 是否允许把「生成结果」也镜像到公共托管（默认关闭：成片可能含客户素材）。
+	PublicMirrorResults bool   `env:"PUBLIC_MIRROR_RESULTS" envDefault:"false"`
 	LinuxDoAuthorizeURL string `env:"LINUX_DO_AUTHORIZE_URL" envDefault:"https://connect.linux.do/oauth2/authorize"`
 	LinuxDoTokenURL     string `env:"LINUX_DO_TOKEN_URL" envDefault:"https://connect.linux.do/oauth2/token"`
 	LinuxDoUserInfoURL  string `env:"LINUX_DO_USERINFO_URL" envDefault:"https://connect.linux.do/api/user"`
