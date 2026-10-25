@@ -852,6 +852,7 @@ export default function AdminSettingsPage() {
                                             { label: "KIE", value: "kie" },
                                             { label: "MiMo", value: "mimo" },
                                             { label: "火山方舟（Ark）", value: "ark" },
+                                            { label: "灵智", value: "anmiao" },
                                             { label: "Flatkey", value: "flatkey" },
                                         ]}
                                         onChange={(protocol: AdminModelChannel["protocol"]) => {
