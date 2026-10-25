@@ -750,7 +750,13 @@ function normalizeVideoResolution(value: string) {
 // 火山方舟响应：{ id, model, status: queued|running|succeeded|failed, content: { video_url, last_frame_url }, error }
 // 这里把嵌套在 content 里的视频地址提到顶层，前端其余逻辑即可直接复用。
 function normalizeArkVideoResponse(payload: ApiVideoResponse): VideoResponse {
-    const root = payload as unknown as Record<string, unknown>;
+    // 后端代理统一用 { code, msg, data } 信封返回，真正的任务字段在 data 里。
+    // 不解包就读不到 status / error / content——任务失败后前端会一直停在
+    // 「正在创作 0%」（status 变空串，canvasVideoTaskFailed 认不出来）。
+    const outer = payload as unknown as Record<string, unknown>;
+    const root = outer.data && typeof outer.data === "object" && !Array.isArray(outer.data)
+        ? (outer.data as Record<string, unknown>)
+        : outer;
     const content = root.content && typeof root.content === "object" ? (root.content as Record<string, unknown>) : {};
     const errorMessage = firstString(nestedMessage(root.error));
     const status = firstString(root.status, root.state, errorMessage ? "failed" : "");
@@ -759,7 +765,7 @@ function normalizeArkVideoResponse(payload: ApiVideoResponse): VideoResponse {
     const videoUrl = succeeded ? firstString(content.video_url, content.videoUrl, root.video_url, root.url, firstVideoUrl(root)) : "";
     return normalizeVideoResponse({
         ...root,
-        task_id: firstString(root.id, root.task_id),
+        task_id: firstString(root.task_id, root.id),
         status,
         ...(videoUrl ? { video_url: videoUrl, url: videoUrl } : {}),
         ...(errorMessage ? { error: { message: errorMessage } } : {}),
