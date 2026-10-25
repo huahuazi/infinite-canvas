@@ -124,7 +124,19 @@ claude mcp add infinite-canvas -- infinite-canvas-agent mcp
 
 也可以直接使用仓库自带的插件包，见 [plugins/](plugins/)：Codex 安装 `plugins/codex-infinite-canvas/`，Claude Code 安装 `plugins/claude-infinite-canvas/`。
 
-详细说明（含 Gemini CLI、Cursor 与插件安装方式）见 [docs/agent-integration.md](docs/agent-integration.md)。
+**服务器托管模式（不用在自己电脑上跑 agent）**：画布用 docker compose 部署时，agent 与站点同源，外部 Agent 直接连站点即可：
+
+```bash
+# 面板会直接生成带凭据的完整命令，复制即可；这里是对应写法
+export INFINITE_CANVAS_TOKEN=<画布侧边栏给出的 MCP token>
+codex mcp add infinite-canvas \
+  --url "https://<你的站点>/api/agent/mcp?clientId=<画布会话>&userId=<用户ID>" \
+  --bearer-token-env-var INFINITE_CANVAS_TOKEN
+```
+
+从 v0.10.0 起这个端点**需要凭据**，不再接受匿名连接；`?userId=` 还会额外挂载 `headless_*` 工具，让 AI 在**页面关着**的时候也能读写画布（批量整理、批量出图）。凭据按用户签发，轮换服务端 `AGENT_MCP_KEY` 后失效。
+
+详细说明（含 Gemini CLI、Cursor、无头通道与排错）见 [docs/agent-integration.md](docs/agent-integration.md)。
 
 ## 火山方舟（Seedance）视频接入
 
