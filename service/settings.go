@@ -644,7 +644,15 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 		sort.Strings(result)
 		return result, nil
 	}
-	request, err := http.NewRequest(http.MethodGet, BuildModelChannelURL(channel, "/models"), nil)
+	requestURL := BuildModelChannelURL(channel, "/models")
+	// 灵智的模型列表不在 Base URL 之下，而是标准的 {scheme}://{host}/v1/models。
+	// 直接拼会得到 /api/v3/anmiao/models，上游返回 404「未找到接口路径」。
+	if IsAnmiaoChannel(channel) {
+		if anmiaoURL := anmiaoModelListURL(channel.BaseURL); anmiaoURL != "" {
+			requestURL = anmiaoURL
+		}
+	}
+	request, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -681,6 +689,18 @@ func isKIEAdminChannel(channel model.ModelChannel) bool {
 	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
 	baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
 	return protocol == "kie" || strings.Contains(baseURL, "kie.ai")
+}
+
+// anmiaoModelListURL 返回灵智的模型列表地址。
+// 灵智的 /models 挂在站点根下（https://api.lk888.ai/v1/models），
+// 与 Ark 任务接口的 /api/v3/anmiao 前缀无关；返回的 id 是平台计费 SKU，
+// 需要用户在「模型名映射」里配成火山真名才能实际使用。
+func anmiaoModelListURL(baseURL string) string {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host + "/v1/models"
 }
 
 func kieMarketModels() []string {
