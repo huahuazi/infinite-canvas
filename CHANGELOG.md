@@ -1,6 +1,21 @@
 # CHANGELOG
 
+## v0.10.0 - 2026-10-25
+
++ [新增] **外部智能体接入鉴权**：`/api/agent/mcp` 不再匿名可用。支持两类凭据——按用户签发的 `mcp_<userId>_<签名>`（HMAC 派生、不落库）与服务间密钥 `AGENT_MCP_KEY`；请求头支持 `Authorization: Bearer` / `X-Agent-Key` / `?key=`。校验放在 Go 反代入口，避免 `Authorization` 被 Rewrite 清掉后失效；`AGENT_MCP_KEY` 未配置时回退 `AGENT_TOKEN`，开箱仍可用
++ [新增] **用户级 MCP 凭据接口** `GET /api/v1/agent/token`：每个用户拿到自己的接入 token，不需要接触服务器共享密钥；服务端轮换 `AGENT_MCP_KEY` 后全部失效
++ [新增] **无头画布通道**：新增 `/api/agent-canvas/*`（列表 / 读图 / 批量 ops / 生成图片 / 查任务），直接读写 `canvas_project.project_data`，**不需要浏览器**。MCP 侧对应 `headless_list_projects`、`headless_read_graph`、`headless_apply_ops`、`headless_generate_image`、`headless_task_status`；`ops` 支持 add_node / update_node / remove_node / add_connection / remove_connection，写库时间与前端 `toISOString()` 对齐到毫秒
++ [新增] **多用户会话隔离**：MCP 地址支持 `?clientId=` 固定工具目标浏览器、`?userId=` 指定无头通道归属用户，避免多人部署时"后连的人抢走画布"
++ [优化] 画布会话 ID 持久化到 `localStorage`（`infinite-canvas:agent-client-id`），刷新 / 重开标签页不再变化，侧边栏可直接复制
++ [优化] 「Agent 接入」面板直接生成带 token / clientId / userId 的完整注册命令，Codex 走 `--bearer-token-env-var`，Claude Code 走 `--header`，复制即用
++ [优化] `/api/agent/health` 不再返回活跃客户端 ID，减少无鉴权端点的信息暴露
++ [文档] 重写 `docs/agent-integration.md`：补鉴权、两类凭据、无头通道 ops 格式、多用户隔离与新的排查章节（401 / 无头工具未注册 / 写入被覆盖）
+
 ## Unreleased
+
++ [新增] 视频节点右键新增「生成白模视频」「生成深度视频」：把原视频作为参考素材、走火山「视频编辑」任务，整体改写为纯白素模或单通道深度图，产出新的视频节点并自动连线。派生时会按官方硬约束自动适配 `ratio=adaptive`、`duration=-1`、素材 4~30 秒与编辑类提示词；白模 / 深度节点的「重试」和「改提示词再生成」都保持编辑任务参数，不会退化成参考生视频
++ [新增] 白模 / 深度派生前的渠道预检：灵智按秒、Flatkey、KIE、APIMart、Gemini 等不承接火山视频编辑任务的渠道会直接拦下并说明原因；素材不足 4 秒或超过 30 秒时也在本地提示，不必等上游报错
++ [文档] 新增 `docs/video-derive.md`：说明视觉级白模 / 深度与几何重建的区别、edit 任务硬约束、提示词调优入口与后续演进方案
 
 ## v0.9.0 - 2026-10-25
 

@@ -23,6 +23,22 @@
 - 创作进度：`set_agent_state` 保存当前阶段、已确认方案和正式参考，供刷新后继续。
 - 需要读取模型、渠道与生成默认值时使用 `get_generation_config`。
 
+## 无头画布通道（页面关着也能用）
+
+当画布页面没有打开，或用户明确要求"后台 / 批量 / 无人值守"处理时，改用 `headless_*` 工具：
+
+- `headless_list_projects`：先列出画布拿到 `projectId`。
+- `headless_read_graph`：读取节点与连线；长文本会截断，不返回图片 Base64。
+- `headless_apply_ops`：批量增删节点与连线，一次请求落库。改节点用 `update_node` + `patch`，`metadata` 会浅合并；`remove_node` 会一并清理关联连线。
+- `headless_generate_image`：服务端直连模型渠道发起图片生成，返回 `taskId`。
+- `headless_task_status`：查询任务状态与产物地址，成功后可用 `headless_apply_ops` 把 `imageUrl` 写回节点 `metadata.content`。
+
+使用约束：
+
+- 页面在线时优先用画布工具，用户能立刻看到变化；页面关着才用无头通道。
+- 无头通道直接改数据库：前端若同时开着同一画布，页面的自动保存可能覆盖结果，先确认页面已关闭。
+- 这些工具只在 MCP 地址带 `?userId=`（或 agent 配了 `CANVAS_USER_ID`）时才会注册。
+
 ## 风格
 
 - 生成节点、配置节点和提示词节点要保持结构清晰，方便用户继续编辑。

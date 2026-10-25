@@ -1,6 +1,28 @@
 import { HOSTED_AGENT_API_BASE } from "./agent-connect-params";
 import { CANVAS_AGENT_TOOLS, normalizeCanvasAgentAction, type CanvasAgentAction, type CanvasAgentToolResult } from "./canvas-agent-tools";
 
+/** 浏览器会话标识的本地存储键：刷新页面、重开标签页都复用同一个 ID。 */
+const CLIENT_ID_STORAGE_KEY = "infinite-canvas:agent-client-id";
+
+/**
+ * 稳定的浏览器会话 ID。
+ * 以前每次加载都随机生成，导致外部 Agent 无法把 MCP 连接固定到某个画布窗口；
+ * 现在持久化到 localStorage，侧边栏可以把它贴进 MCP 地址的 ?clientId=。
+ */
+export function resolveAgentClientId(): string {
+    const fallback = () => `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    if (typeof window === "undefined") return fallback();
+    try {
+        const existing = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+        if (existing) return existing;
+        const created = `browser-${Math.random().toString(36).slice(2, 10)}`;
+        window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, created);
+        return created;
+    } catch {
+        return fallback();
+    }
+}
+
 /** 连接失败原因，供面板展示可区分的排查文案。 */
 export type LocalAgentFailureCode = "token_missing" | "service_offline" | "unauthorized" | "network_blocked" | "protocol_mismatch";
 
@@ -96,7 +118,7 @@ export class LocalAgentClient {
     private adapter = "";
 
     constructor(private options: LocalAgentBridgeOptions) {
-        this.clientId = options.clientId || `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        this.clientId = options.clientId || resolveAgentClientId();
     }
 
     private get isOpen() {

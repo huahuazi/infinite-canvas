@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { adapterRegistry } from "../adapters/registry.js";
 import { canvasSession } from "../canvas/session.js";
+import { resolveHeadlessConfig } from "../canvas/headless.js";
 import { DEFAULT_PORT, loadConfig, saveConfig, VERSION, type CanvasAgentConfig } from "../config.js";
 import type { AgentEmit, AgentPermissionMode } from "../codex/types.js";
 import { createMcpServer, toolRegistry } from "./mcp.js";
@@ -64,6 +65,8 @@ export function startHttpServer() {
     });
 
     // ---- MCP over HTTP（Codex / Claude 远程连接入口，地址形如 /mcp） ----
+    // 多用户部署时在地址上带 ?clientId=<浏览器会话>&userId=<用户ID>：
+    // clientId 决定工具打到哪个浏览器，userId 决定无头通道读写谁的画布。
     app.post("/mcp", route(async (req, res) => {
         const sessionId = String(req.headers["mcp-session-id"] || "");
         const existing = sessionId ? mcpTransports.get(sessionId) : undefined;
@@ -71,7 +74,9 @@ export function startHttpServer() {
             await existing.handleRequest(req, res, req.body);
             return;
         }
-        const server = createMcpServer(config);
+        const clientId = String(req.query.clientId || "").trim() || undefined;
+        const userId = String(req.query.userId || "").trim() || undefined;
+        const server = createMcpServer(config, { clientId, headless: resolveHeadlessConfig(userId) });
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
@@ -111,8 +116,9 @@ export function startHttpServer() {
     app.post("/api/tools", route(async (req, res) => {
         const name = String(req.body?.name || "");
         const input = req.body?.input && typeof req.body.input === "object" ? req.body.input : {};
+        const clientId = String(req.body?.clientId || "").trim() || undefined;
         if (!name) return res.status(400).json({ ok: false, error: "工具名称不能为空" });
-        const result = await canvasSession.callTool(name, input);
+        const result = await canvasSession.callTool(name, input, clientId);
         res.json({ ok: true, result });
     }));
 

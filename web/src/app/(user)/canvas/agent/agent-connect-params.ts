@@ -72,19 +72,45 @@ export function withHttpTransport(origin: string) {
     return `${origin.replace(/\/+$/, "")}${HOSTED_AGENT_MCP_PATH}`;
 }
 
+/** 外部 Agent 的身份参数：绑定到哪个浏览器会话、代表哪个用户、用哪枚凭据。 */
+export type AgentIdentity = { clientId?: string; userId?: string; token?: string };
+
+/**
+ * 把身份参数拼到 MCP 地址上：
+ * - clientId 决定工具打到哪个浏览器窗口（多用户/多标签页时避免串台）；
+ * - userId 决定无头通道读写谁的画布。
+ */
+export function withClientIdentity(url: string, identity: AgentIdentity = {}) {
+    const params = new URLSearchParams();
+    if (identity.clientId) params.set("clientId", identity.clientId);
+    if (identity.userId) params.set("userId", identity.userId);
+    const query = params.toString();
+    if (!query) return url;
+    return `${url}${url.includes("?") ? "&" : "?"}${query}`;
+}
+
 export type McpCommand = { agent: string; command: string; hint?: string };
 
 /**
  * 按部署形态生成可复制的 MCP 注册命令：托管走站点同源 http 传输，本地走仓库内可直接执行的 stdio 命令。
  * 本地命令不要求先 npm link：$(git rev-parse --show-toplevel) 在仓库内执行时会展开成仓库绝对路径。
  */
-export function resolveMcpCommands(mode: AgentConnectionMode, origin = currentOrigin()): McpCommand[] {
+export function resolveMcpCommands(mode: AgentConnectionMode, origin = currentOrigin(), identity: AgentIdentity = {}): McpCommand[] {
     if (mode === "hosted") {
-        const url = withHttpTransport(origin);
+        const url = withClientIdentity(withHttpTransport(origin), identity);
+        const token = identity.token || "<在画布侧边栏复制 MCP token>";
         return [
-            { agent: "Claude Code", command: `claude mcp add infinite-canvas --transport http ${url}` },
-            // Codex CLI 的 HTTP MCP 用 --url，没有 --transport 选项（claude 才是 --transport http）。
-            { agent: "Codex", command: `codex mcp add infinite-canvas --url ${url}` },
+            {
+                agent: "Codex",
+                // Codex 的 HTTP MCP 只支持从环境变量读 Bearer，不能直接在命令里写 header。
+                command: `export INFINITE_CANVAS_TOKEN=${token}\ncodex mcp add infinite-canvas --url "${url}" --bearer-token-env-var INFINITE_CANVAS_TOKEN`,
+                hint: "两行一起粘贴；Codex 需要重启后才会加载新的 MCP 配置。",
+            },
+            {
+                agent: "Claude Code",
+                command: `claude mcp add infinite-canvas --transport http "${url}" --header "Authorization: Bearer ${token}"`,
+                hint: "Claude Code 直接把凭据写进 header，不需要环境变量。",
+            },
         ];
     }
 

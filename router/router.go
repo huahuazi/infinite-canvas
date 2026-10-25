@@ -97,6 +97,8 @@ func New() *gin.Engine {
 		handler.DeleteDirectFileRecord(c.Writer, c.Request, c.Param("id"))
 	})
 	v1.GET("/user-config", gin.WrapF(handler.UserConfig))
+	// 用户级 MCP 凭据：外部智能体用 Authorization: Bearer <token> 接入，不需要共享密钥。
+	v1.GET("/agent/token", gin.WrapF(handler.AgentUserToken))
 	v1.POST("/user-config/model", gin.WrapF(handler.SaveUserModelConfig))
 	v1.POST("/user-config/storage", gin.WrapF(handler.SaveUserStorageProvider))
 	v1.GET("/canvas/projects", gin.WrapF(handler.UserCanvasProjects))
@@ -123,6 +125,22 @@ func New() *gin.Engine {
 	v1.GET("/user-data/assets", gin.WrapF(handler.UserAssetData))
 	v1.POST("/user-data/assets", gin.WrapF(handler.SaveUserAssetData))
 	api.GET("/proxy-image", gin.WrapF(handler.ProxyImage))
+	// 无头画布通道：给「没有浏览器」的外部智能体用，直接读写 canvas_project。
+	// 鉴权走服务间密钥（X-Agent-Key）+ 目标用户（X-User-Id），仅在服务器同机/内网使用。
+	agentCanvas := api.Group("/agent-canvas", middleware.AgentServiceAuth)
+	agentCanvas.GET("/projects", gin.WrapF(handler.AgentCanvasProjects))
+	agentCanvas.GET("/projects/:id/graph", func(c *gin.Context) {
+		handler.AgentCanvasGraph(c.Writer, c.Request, c.Param("id"))
+	})
+	agentCanvas.POST("/projects/:id/ops", func(c *gin.Context) {
+		handler.AgentCanvasOps(c.Writer, c.Request, c.Param("id"))
+	})
+	agentCanvas.POST("/projects/:id/generate", func(c *gin.Context) {
+		handler.AgentCanvasGenerate(c.Writer, c.Request, c.Param("id"))
+	})
+	agentCanvas.GET("/tasks/:id", func(c *gin.Context) {
+		handler.AgentCanvasTask(c.Writer, c.Request, c.Param("id"))
+	})
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
 	api.POST("/admin/login", gin.WrapF(handler.AdminLogin))

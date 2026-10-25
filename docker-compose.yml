@@ -28,6 +28,9 @@ services:
       # 与 app 服务共用 .env 里的同一个 AGENT_TOKEN；留空则本服务随机生成 token，
       # app 容器会注入空 token，表现为 /api/agent/health 正常但 /events 返回 401。
       - AGENT_TOKEN=${AGENT_TOKEN:-}
+      # 无头画布通道：agent 用它调 app 的 /api/agent-canvas/*（服务间密钥，与 app 校验值一致）。
+      - AGENT_MCP_KEY=${AGENT_MCP_KEY:-}
+      - CANVAS_API_BASE=http://app:3000
     ports:
       # 只绑定宿主机 127.0.0.1，避免 agent 服务被公网直接访问；
       # app 容器仍走 compose 网络 agent:17371，不受该绑定影响。

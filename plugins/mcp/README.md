@@ -13,16 +13,20 @@ infinite-canvas-agent mcp
 
 ## 服务器托管模式：一条命令接入
 
-画布按 `docker-compose.yml` 部署时，agent 与画布同源托管，浏览器零配置；外部 Agent 也只需要画布站点自己的地址（把 `<服务器地址>` 换成你打开画布的地址，含端口）：
+画布按 `docker-compose.yml` 部署时，agent 与画布同源托管，浏览器零配置。外部 Agent 用画布站点自己的地址（把 `<站点>` 换成你打开画布的地址，含端口）：
 
 ```bash
+# Codex（HTTP MCP 只支持从环境变量读 Bearer）
+export INFINITE_CANVAS_TOKEN=<你的 MCP token>
+codex mcp add infinite-canvas --url "<站点>/api/agent/mcp?clientId=<画布会话>&userId=<用户ID>" --bearer-token-env-var INFINITE_CANVAS_TOKEN
+
 # Claude Code
-claude mcp add infinite-canvas --transport http <服务器地址>/api/agent/mcp
-# Codex（HTTP 服务器用 --url，没有 --transport 选项）
-codex mcp add infinite-canvas --url <服务器地址>/api/agent/mcp
+claude mcp add infinite-canvas --transport http "<站点>/api/agent/mcp?clientId=<画布会话>&userId=<用户ID>" --header "Authorization: Bearer <你的 MCP token>"
 ```
 
-`/api/agent/mcp` 由 Go 后端同源反代到 agent 容器，因此这条命令不需要 token。agent 容器的 `17371` 端口只绑定宿主机 `127.0.0.1`，不对外网开放，不要用 `<服务器IP>:17371` 直连。
+**凭据从哪来**：打开画布 → 右侧助手面板 →「Agent 接入」，面板会直接生成带上 token / clientId / userId 的完整命令，复制即用。
+
+`clientId` 决定工具打到哪个浏览器窗口（不带则取最近连接的那个），`userId` 决定无头通道读写谁的画布（不带则不注册 `headless_*` 工具）。agent 容器的 `17371` 端口只绑定宿主机 `127.0.0.1`，不要用 `<服务器IP>:17371` 直连。
 
 ## MCP 工具
 
@@ -33,6 +37,9 @@ codex mcp add infinite-canvas --url <服务器地址>/api/agent/mcp
 - 文本：`create_text_node`、`create_primary_script_node`、`update_text_node`、`update_node`
 - 结构：`delete_node`、`create_connection`、`delete_connection`、`create_group`、`arrange_nodes`
 - 生成：`generate_image`、`edit_image`、`generate_video`、`generate_audio`
+- 无头（页面关着也能用，需地址带 `?userId=`）：`headless_list_projects`、`headless_read_graph`、`headless_apply_ops`、`headless_generate_image`、`headless_task_status`
+
+前 5 组由网页前端执行，页面必须开着；`headless_*` 由后端直接改数据库，不需要浏览器。
 
 ## 各 Agent 注册命令示例
 

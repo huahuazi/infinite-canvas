@@ -75,29 +75,41 @@ export class CanvasSession {
         return this.activeClientId;
     }
 
-    /** 当前生效的画布工具清单。 */
-    toolDefinitions(): CanvasToolDefinition[] {
-        return this.clientStates.get(this.activeClientId)?.tools || [];
+    /** 当前生效的画布工具清单。clientId 为空时取活跃客户端。 */
+    toolDefinitions(clientId?: string): CanvasToolDefinition[] {
+        return this.clientStates.get(this.targetClientId(clientId))?.tools || [];
     }
 
     /** 是否有已连接且上报过状态的浏览器。 */
-    hasCanvas(): boolean {
-        return Boolean(this.activeClientId && this.clientStates.has(this.activeClientId));
+    hasCanvas(clientId?: string): boolean {
+        const target = this.targetClientId(clientId);
+        return Boolean(target && this.clientStates.has(target));
     }
 
     /** 当前画布快照。 */
-    canvasSnapshot(): CanvasSnapshot | null {
-        return this.clientStates.get(this.activeClientId)?.snapshot || null;
+    canvasSnapshot(clientId?: string): CanvasSnapshot | null {
+        return this.clientStates.get(this.targetClientId(clientId))?.snapshot || null;
     }
 
     /**
-     * 调用画布工具：向活跃浏览器广播 tool_call 事件并等待执行结果。
+     * 解析工具执行目标：显式指定的 clientId 有效则用它，否则回退到活跃客户端。
+     * 多用户部署时，每个 MCP 连接应在 URL 上带 ?clientId=，避免互相抢画布。
+     */
+    private targetClientId(preferred?: string): string {
+        const id = (preferred || "").trim();
+        if (id && (this.clients.has(id) || this.clientStates.has(id))) return id;
+        return this.activeClientId;
+    }
+
+    /**
+     * 调用画布工具：向目标浏览器广播 tool_call 事件并等待执行结果。
      * 浏览器执行后通过 POST /canvas/result 回写。
      */
-    callTool(name: string, input: Record<string, unknown>): Promise<unknown> {
-        if (!this.hasCanvas()) return Promise.reject(new Error("当前没有已连接画布，请先在浏览器打开画布并连接本地 Agent"));
+    callTool(name: string, input: Record<string, unknown>, clientId?: string): Promise<unknown> {
+        const target = this.targetClientId(clientId);
+        if (!this.hasCanvas(target)) return Promise.reject(new Error("当前没有已连接画布，请先在浏览器打开画布并连接本地 Agent"));
         const toolCallId = crypto.randomUUID();
-        const response = this.clients.get(this.activeClientId);
+        const response = this.clients.get(target);
         if (!response) return Promise.reject(new Error("画布客户端连接已断开，请重新连接"));
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
@@ -106,7 +118,7 @@ export class CanvasSession {
             }, this.toolTimeoutMs);
             this.pendingToolCalls.set(toolCallId, { resolve, reject, timer });
             writeEvent(response, "tool_call", { toolCallId, name, input });
-            logger.info("Tool call dispatched", { toolCallId, name, clientId: this.activeClientId });
+            logger.info("Tool call dispatched", { toolCallId, name, clientId: target });
         });
     }
 
@@ -127,9 +139,9 @@ export class CanvasSession {
         for (const res of this.clients.values()) writeEvent(res, type, payload);
     }
 
-    /** 协议版本健康信息。 */
+    /** 协议版本健康信息（不暴露具体客户端 ID）。 */
     health() {
-        return { ok: true, protocolVersion: PROTOCOL_VERSION, clients: this.clients.size, hasCanvas: this.hasCanvas(), activeClientId: this.activeClientId || "" };
+        return { ok: true, protocolVersion: PROTOCOL_VERSION, clients: this.clients.size, hasCanvas: this.hasCanvas() };
     }
 }
 

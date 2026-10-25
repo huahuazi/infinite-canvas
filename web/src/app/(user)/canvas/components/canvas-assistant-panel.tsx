@@ -25,14 +25,16 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
 import { imageToDataUrl } from "@/services/image-storage";
+import { apiGet } from "@/services/api/request";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { AGENT_FAILURE_INFO, currentOrigin, resolveLocalAgentStartCommand, resolveMcpCommands, type AgentConnectionMode } from "../agent/agent-connect-params";
 import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
 import type { CanvasAgentContext } from "../agent/canvas-agent-context";
 import type { CanvasAgentAction, CanvasAgentToolResult } from "../agent/canvas-agent-tools";
-import { probeHostedAgent, type LocalAgentStatus } from "../agent/local-agent-client";
+import { probeHostedAgent, resolveAgentClientId, type LocalAgentStatus } from "../agent/local-agent-client";
 import {
     CanvasNodeType,
     type CanvasAgentConfig,
@@ -552,7 +554,27 @@ function LocalAgentConnect({ mode, status }: { mode: AgentConnectionMode | null;
 
     const isConnected = status.state === "connected";
     const isLocal = mode === "local";
-    const commands = useMemo(() => resolveMcpCommands(isLocal ? "local" : "hosted"), [isLocal]);
+    const authToken = useUserStore((state) => state.token);
+    const userId = useUserStore((state) => state.user?.id || "");
+    const clientId = useMemo(() => resolveAgentClientId(), []);
+    const [mcpToken, setMcpToken] = useState("");
+    // MCP 凭据按用户签发：外部 Agent 用 Bearer 接入，不需要接触服务器共享密钥。
+    useEffect(() => {
+        if (!authToken) return;
+        let alive = true;
+        void apiGet<{ token?: string }>("/api/v1/agent/token", undefined, authToken)
+            .then((data) => {
+                if (alive && data?.token) setMcpToken(data.token);
+            })
+            .catch(() => undefined);
+        return () => {
+            alive = false;
+        };
+    }, [authToken]);
+    const commands = useMemo(
+        () => resolveMcpCommands(isLocal ? "local" : "hosted", currentOrigin(), { clientId, userId, token: mcpToken }),
+        [isLocal, clientId, userId, mcpToken],
+    );
     const startCommand = useMemo(() => (isLocal ? resolveLocalAgentStartCommand() : "docker compose up -d agent"), [isLocal]);
     const failure = status.state === "error" && status.reason ? AGENT_FAILURE_INFO[status.reason] : null;
     const title = isConnected ? (status.mode === "direct" ? "已直连 Agent 服务" : "已接入站点托管 Agent") : isLocal ? "本地 Agent 模式" : "服务器托管 Agent 模式";
@@ -562,7 +584,7 @@ function LocalAgentConnect({ mode, status }: { mode: AgentConnectionMode | null;
             : "站点同源托管的 Agent 已连上画布，Codex / Claude Code 等直接用下面的 http 命令即可接入。"
         : isLocal
           ? "先在本机启动 Agent 服务，再执行下面的命令把画布注册给 Codex / Claude Code。"
-          : "Agent 由站点同源托管，执行下面的命令即可让 Codex / Claude Code 连上本画布，无需任何 token。";
+          : "Agent 由站点同源托管，复制下面的命令即可让 Codex / Claude Code 连上本画布；命令里已带你的 MCP 凭据与画布会话 ID。";
     const credentialInputStyle = { background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text };
 
     const connect = () => {
@@ -624,6 +646,21 @@ function LocalAgentConnect({ mode, status }: { mode: AgentConnectionMode | null;
                                 {startCommand}
                             </code>
                             <div className="font-medium opacity-80">② 注册 MCP：复制下面命令直接粘到终端</div>
+                            {!isLocal ? (
+                                <div className="flex items-center gap-1.5 rounded px-1.5 py-1 font-mono text-[0.8em]" style={{ background: theme.toolbar.itemHover }}>
+                                    <span className="shrink-0 opacity-60">画布会话</span>
+                                    <span className="min-w-0 flex-1 truncate">{clientId}</span>
+                                    <button
+                                        type="button"
+                                        className="shrink-0 cursor-pointer border-0 bg-transparent p-0"
+                                        style={{ color: theme.node.text }}
+                                        aria-label="复制画布会话 ID"
+                                        onClick={() => copyText(clientId, "已复制画布会话 ID")}
+                                    >
+                                        <Copy className="size-3.5" />
+                                    </button>
+                                </div>
+                            ) : null}
                             {commands.map((item) => (
                                 <div key={item.agent} className="space-y-1">
                                     <div className="flex items-start gap-1.5">
@@ -646,7 +683,7 @@ function LocalAgentConnect({ mode, status }: { mode: AgentConnectionMode | null;
                             <p className="opacity-60">
                                 {isLocal
                                     ? "本地 Agent 默认监听 127.0.0.1:17371，token 写在 ~/.infinite-canvas/canvas-agent.json；命令在仓库目录里执行，$(git rev-parse --show-toplevel) 会展开成仓库绝对路径，不需要先 npm link。"
-                                    : "MCP 地址取当前站点 " + currentOrigin() + "，由后端同源反代到 agent 容器。"}
+                                    : "MCP 地址取当前站点 " + currentOrigin() + "，由后端同源反代到 agent 容器。凭据是按用户签发的 MCP token，服务端轮换 AGENT_MCP_KEY 后需要回来重新复制命令。"}
                             </p>
                         </div>
 

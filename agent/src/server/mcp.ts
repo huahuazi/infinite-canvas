@@ -3,9 +3,18 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { AGENT_PROMPT, loadConfig, VERSION, type CanvasAgentConfig } from "../config.js";
+import { callHeadlessTool, HEADLESS_TOOLS, resolveHeadlessConfig, type HeadlessConfig } from "../canvas/headless.js";
 import { logger } from "../utils/logger.js";
 
 export type ToolSpec = { type: "function"; function: { name: string; description: string; parameters: { type: "object"; properties: Record<string, unknown>; required?: string[]; additionalProperties?: boolean } } };
+
+/** 单个 MCP 连接的上下文：绑定到哪个浏览器会话、是否挂载无头通道。 */
+export type McpServerOptions = {
+    /** 浏览器会话 ID（多用户部署时由 MCP 地址的 ?clientId= 指定）。 */
+    clientId?: string;
+    /** 无头画布通道配置；为空时只注册浏览器代理工具。 */
+    headless?: HeadlessConfig | null;
+};
 
 const REFRESH_INTERVAL_MS = 5_000;
 
@@ -41,17 +50,32 @@ class ToolRegistry {
 export const toolRegistry = new ToolRegistry();
 
 /** 为单个连接创建 MCP Server（SDK 每个 Protocol 只支持一个 transport，连接各自实例）。 */
-export function createMcpServer(config: CanvasAgentConfig) {
+export function createMcpServer(config: CanvasAgentConfig, options: McpServerOptions = {}) {
     const server = new McpServer({ name: "infinite-canvas", version: VERSION }, { instructions: AGENT_PROMPT });
+    const clientId = (options.clientId || "").trim() || undefined;
     /** 占位工具：保证 tools/ handlers 总在（否则无画布连接时 tools/list 报 Method not found）。 */
     server.registerTool("ping", { description: "检查画布 Agent 服务连通性，始终可用。", inputSchema: {} }, async () => ({ content: [{ type: "text" as const, text: '{"ok":true}' }] }));
+
+    // 浏览器代理工具：执行者是网页，因此要求页面在线。
     for (const tool of toolRegistry.list()) {
         const { name } = tool.function;
         server.registerTool(name, { description: tool.function.description, inputSchema: jsonSchemaToZod(tool.function.parameters) }, async (input: unknown) => {
-            const result = await postCanvasTool(config, name, input);
+            const result = await postCanvasTool(config, name, input, clientId);
             return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         });
-        logger.debug("Registered canvas tool", { name });
+        logger.debug("Registered canvas tool", { name, clientId });
+    }
+
+    // 无头工具：直接读写后端画布数据，页面关着也能用。
+    if (options.headless) {
+        for (const tool of HEADLESS_TOOLS) {
+            const { name } = tool.function;
+            server.registerTool(name, { description: tool.function.description, inputSchema: jsonSchemaToZod(tool.function.parameters) }, async (input: unknown) => {
+                const result = await callHeadlessTool(name, input, options.headless!);
+                return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+            });
+            logger.debug("Registered headless tool", { name, userId: options.headless.userId });
+        }
     }
     return server;
 }
@@ -60,16 +84,16 @@ export function createMcpServer(config: CanvasAgentConfig) {
 export async function startMcpServer() {
     const config = loadConfig(true);
     await toolRegistry.refresh(config);
-    const server = createMcpServer(config);
+    const server = createMcpServer(config, { headless: resolveHeadlessConfig() });
     await server.connect(new StdioServerTransport());
 }
 
 /** 将 MCP 工具调用转发到本地 Agent HTTP 服务。 */
-export async function postCanvasTool(config: CanvasAgentConfig, name: string, input: unknown) {
+export async function postCanvasTool(config: CanvasAgentConfig, name: string, input: unknown, clientId?: string) {
     const res = await fetch(`${config.url}/api/tools`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-canvas-agent-token": config.token },
-        body: JSON.stringify({ name, input }),
+        body: JSON.stringify({ name, input, clientId: clientId || "" }),
     });
     const body = (await res.json()) as { ok?: boolean; result?: unknown; error?: string };
     if (!body.ok || res.status >= 400) throw new Error(body.error || `tool call failed: ${res.status}`);
@@ -87,6 +111,7 @@ function jsonSchemaToZod(parameters: { type?: string; properties?: Record<string
         if (schema.type === "array" || Array.isArray(schema.type)) field = z.array(z.unknown());
         else if (schema.type === "boolean") field = z.boolean();
         else if (schema.type === "number" || schema.type === "integer") field = z.number();
+        else if (schema.type === "object") field = z.record(z.unknown());
         else field = z.string();
         shape[key] = required.has(key) ? field : field.optional();
     }
