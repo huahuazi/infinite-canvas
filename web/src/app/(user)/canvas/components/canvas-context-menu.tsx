@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { BetweenHorizontalStart, Bookmark, ChevronRight, ClipboardPaste, CloudUpload, Copy, CopyPlus, Crop, Download, Eraser, GalleryHorizontal, GalleryHorizontalEnd, Globe2, Image as ImageIcon, ImagePlus, Images, Layers3, List, Maximize2, Music2, Pencil, Plus, Redo2, RefreshCw, Rotate3d, Scissors, Settings2, Sparkles, Trash2, Undo2, Upload, Video, ZoomIn } from "lucide-react";
+import { BetweenHorizontalStart, Bookmark, Box, ChevronRight, ClipboardPaste, CloudUpload, Copy, CopyPlus, Crop, Download, Eraser, GalleryHorizontal, GalleryHorizontalEnd, Globe2, Image as ImageIcon, ImagePlus, Images, Layers3, List, Maximize2, Music2, Pencil, Plus, Redo2, RefreshCw, Rotate3d, Scissors, Settings2, Sparkles, Trash2, Undo2, Upload, Video, ZoomIn } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import type { VideoDeriveKind } from "@/lib/video-derive";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ContextMenuState } from "../types";
 import { isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
@@ -24,6 +25,7 @@ export type CanvasContextNodeActions = {
     generateImage: (node: CanvasNodeData) => void;
     reversePrompt: (node: CanvasNodeData) => void;
     captureFrame: (node: CanvasNodeData, position: VideoFramePosition) => void;
+    deriveVideo: (node: CanvasNodeData, kind: VideoDeriveKind) => void;
     crop: (node: CanvasNodeData) => void;
     split: (node: CanvasNodeData) => void;
     explode: (node: CanvasNodeData) => void;
@@ -80,6 +82,8 @@ export function CanvasNodeContextMenu({ menu, node, actions, onDeleteConnection,
             {isVideo ? (
                 <>
                     {divider}
+                    <MenuButton icon={<Box className="size-4" />} label="生成白模视频" onClick={() => run(() => actions.deriveVideo(node, "clay"))} />
+                    <MenuButton icon={<Layers3 className="size-4" />} label="生成深度视频" onClick={() => run(() => actions.deriveVideo(node, "depth"))} />
                     <MenuButton icon={<BetweenHorizontalStart className="size-4" />} label="截取首帧" onClick={() => run(() => actions.captureFrame(node, "first"))} />
                     <MenuButton icon={<GalleryHorizontalEnd className="size-4" />} label="截取尾帧" onClick={() => run(() => actions.captureFrame(node, "last"))} />
                     <MenuButton icon={<GalleryHorizontal className="size-4" />} label="截取当前帧" onClick={() => run(() => actions.captureFrame(node, "current"))} />

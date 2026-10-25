@@ -107,6 +107,8 @@ export type CanvasNodeMetadata = {
     audioTaskResultId?: string;
     videoTaskId?: string;
     videoTaskVideoId?: string;
+    /** 由参考视频派生而来时记录派生类型（clay=白模 / depth=深度图），重试时据此还原编辑任务参数 */
+    deriveKind?: "clay" | "depth";
     firstFrameNodeId?: string;
     lastFrameNodeId?: string;
     multiShot?: string;

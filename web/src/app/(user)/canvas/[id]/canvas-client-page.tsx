@@ -49,6 +49,7 @@ import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAnmiaoBaseUrl, seedanceDurationMax, seedanceDurationOptionsFor } from "@/lib/seedance-video";
+import { VIDEO_DERIVE_PRESETS, applyVideoDeriveConfig, videoDeriveSupportIssue, type VideoDeriveKind } from "@/lib/video-derive";
 import { arkAssetReferences } from "../utils/canvas-ark-assets";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -2416,6 +2417,102 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [message],
     );
 
+    // 基于参考视频派生白模 / 深度视频：走火山「视频编辑」任务，原视频作为 reference_video，
+    // 画面内容由提示词整体改写，构图 / 机位 / 动作沿用原视频。
+    const deriveVideoNode = useCallback(
+        async (node: CanvasNodeData, kind: VideoDeriveKind) => {
+            setContextMenu(null);
+            if (node.type !== CanvasNodeType.Video || !node.metadata?.content) {
+                message.error("该节点没有可用的视频");
+                return;
+            }
+            const preset = VIDEO_DERIVE_PRESETS[kind];
+            const baseConfig = buildGenerationConfig(effectiveConfig, node, "video");
+            const issue = videoDeriveSupportIssue(baseConfig, node.metadata.durationMs);
+            if (issue) {
+                message.warning(issue);
+                return;
+            }
+            if (!isAiConfigReady(baseConfig, baseConfig.model)) {
+                openConfigDialog(true);
+                return;
+            }
+            // 视频编辑任务的 ratio / duration 与常规生成不同，这里只覆盖本次请求。
+            const config = applyVideoDeriveConfig(baseConfig, kind);
+            const videoId = nanoid();
+            const clientTaskId = `client_video_task_${videoId}`;
+            const startedAt = Date.now();
+            const size = fitNodeSize(node.metadata.naturalWidth || node.width || 1280, node.metadata.naturalHeight || node.height || 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+            const x = node.position.x + node.width + 96;
+            let y = node.position.y + node.height / 2 - size.height / 2;
+            while (nodesRef.current.some((item) => item.id !== node.id && item.position.x < x + size.width && item.position.x + item.width > x && item.position.y < y + size.height && item.position.y + item.height > y)) y += size.height + 24;
+            const child: CanvasNodeData = {
+                id: videoId,
+                type: CanvasNodeType.Video,
+                title: `${preset.nodeTitle} · ${node.title || "视频"}`,
+                position: { x, y },
+                ...size,
+                metadata: {
+                    prompt: preset.prompt,
+                    status: NODE_STATUS_LOADING,
+                    model: config.model,
+                    channelId: config.videoChannelId || config.activeChannelId,
+                    size: "adaptive",
+                    seconds: "-1",
+                    vquality: config.vquality,
+                    mode: config.videoMode,
+                    negativePrompt: config.videoNegativePrompt,
+                    multiShot: config.videoMultiShot,
+                    shotType: config.videoShotType,
+                    generateAudio: "false",
+                    characterOrientation: config.videoCharacterOrientation,
+                    watermark: config.videoWatermark,
+                    references: [node.metadata.storageKey || node.metadata.content],
+                    deriveKind: kind,
+                    startedAt,
+                    progress: 0,
+                    videoTaskId: clientTaskId,
+                },
+            };
+            setNodes((prev) => [...prev, child]);
+            setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: node.id, toNodeId: videoId }]);
+            setSelectedNodeIds(new Set([videoId]));
+            setSelectedConnectionId(null);
+            try {
+                const created = await createVideoGenerationTask(
+                    config,
+                    preset.prompt,
+                    {
+                        references: [],
+                        videoReferences: [
+                            {
+                                id: node.id,
+                                name: `video-${node.id}.mp4`,
+                                type: node.metadata.mimeType || "video/mp4",
+                                url: node.metadata.content,
+                                storageKey: node.metadata.storageKey,
+                                bytes: node.metadata.bytes,
+                                width: node.metadata.naturalWidth,
+                                height: node.metadata.naturalHeight,
+                                durationMs: node.metadata.durationMs,
+                            },
+                        ],
+                        audioReferences: [],
+                    },
+                    undefined,
+                    { clientTaskId, source: "canvas", sourceId: videoId },
+                );
+                setNodes((prev) => applyCanvasVideoTaskUpdate(prev, videoId, created.task, config, startedAt, size));
+                message.success(`已提交${preset.label}视频任务`);
+            } catch (error) {
+                const errorDetails = error instanceof Error ? error.message : `${preset.label}视频生成失败`;
+                message.error(errorDetails);
+                setNodes((prev) => prev.map((item) => (item.id === videoId ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+            }
+        },
+        [effectiveConfig, message, openConfigDialog],
+    );
+
     const uploadNodeMediaToCloud = useCallback(
         async (node: CanvasNodeData) => {
             if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content || node.metadata.storageKey?.startsWith("server:") || uploadingMediaNodeIdsRef.current.has(node.id)) return;
@@ -3622,7 +3719,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 }
 
                 if (mode === "video") {
-                    const videoGenerationConfig = withCanvasVideoAdvancedConfig(generationConfig, generationContext);
+                    // 白模 / 深度节点上继续改提示词再生成时，同样要保持视频编辑任务的参数约束。
+                    const videoGenerationConfig = applyVideoDeriveConfig(withCanvasVideoAdvancedConfig(generationConfig, generationContext), sourceNode?.metadata?.deriveKind);
                     const frameReferencesEnabled = supportsVideoFrameReferences(videoGenerationConfig.model, channelProtocolForConfig(videoGenerationConfig));
                     const firstFrame = frameReferencesEnabled ? generationContext.firstFrame : null;
                     const lastFrame = frameReferencesEnabled ? generationContext.lastFrame : null;
@@ -3666,6 +3764,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             startedAt: generationStartedAt,
                             progress: 0,
                             videoTaskId: clientTaskId,
+                            deriveKind: sourceNode?.metadata?.deriveKind,
                         },
                     };
                     pendingChildIds = [videoId];
@@ -4307,7 +4406,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
-                    const videoGenerationConfig = context ? withCanvasVideoAdvancedConfig(generationConfig, context) : generationConfig;
+                    // 白模 / 深度节点重试时仍要按视频编辑任务提交（ratio=adaptive、duration=-1），
+                    // 否则会退化成普通的参考生视频，产出和原来对不上。
+                    const videoGenerationConfig = applyVideoDeriveConfig(context ? withCanvasVideoAdvancedConfig(generationConfig, context) : generationConfig, node.metadata?.deriveKind);
                     const frameReferencesEnabled = supportsVideoFrameReferences(videoGenerationConfig.model, channelProtocolForConfig(videoGenerationConfig));
                     const firstFrame = frameReferencesEnabled ? context?.firstFrame || null : null;
                     const lastFrame = frameReferencesEnabled ? context?.lastFrame || null : null;
@@ -4989,6 +5090,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             generateImage: (node) => void generateImageFromTextNode(node),
                             reversePrompt: createReversePromptNodes,
                             captureFrame: (node, position) => void captureVideoNodeFrame(node.id, position),
+                            deriveVideo: (node, kind) => void deriveVideoNode(node, kind),
                             crop: (node) => setCropNodeId(node.id),
                             split: (node) => setSplitNodeId(node.id),
                             explode: (node) => setExplodeNodeId(node.id),
