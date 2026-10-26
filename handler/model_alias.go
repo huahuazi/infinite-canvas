@@ -193,6 +193,13 @@ func rewriteModelChannelRequestBody(body []byte, contentType string, channel mod
 			return body, contentType, err
 		}
 		body = clamped
+		// 灵智对单张参考图有 10MB（解码后）上限，比火山官方的请求体上限严格得多。
+		// 前端优先转存公网 URL，只有回退到 Base64 内联时才可能超限，这里兜底压缩。
+		shrunk, err := shrinkAnmiaoReferenceImages(body)
+		if err != nil {
+			return body, contentType, err
+		}
+		body = shrunk
 	}
 	if normalize == nil {
 		return body, contentType, nil

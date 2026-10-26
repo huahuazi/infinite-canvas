@@ -1018,7 +1018,7 @@ async function arkReferenceImageUrl(image: ReferenceImage) {
     const uploaded = await uploadArkReferenceToPublicUrl(file, file.name || "reference.png", false).catch(() => "");
     if (uploaded) return uploaded;
     if (dataUrl.length >= ARK_REQUEST_BODY_LIMIT) {
-        throw new VideoRequestError("图片过大无法内联传给火山方舟：请在后端配置 PUBLIC_BASE_URL 走公网素材，或把图片压到 30MB 以内");
+        throw new VideoRequestError("图片过大无法内联传给上游：请在后端配置 PUBLIC_BASE_URL 走公网素材，或把图片压到 10MB 以内");
     }
     return dataUrl;
 }
