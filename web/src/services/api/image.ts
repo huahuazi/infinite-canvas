@@ -6,6 +6,7 @@ import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
+import { compressImageDataUrlForUpload, compressImageFileForUpload } from "@/lib/image-compress";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -794,7 +795,10 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
         formData.set("stream", "true");
         formData.set("partial_images", String(params.streamPartialImages));
     }
-    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    // 上游对单张参考图有体积上限，手机原图直接发会被拒成 file too large。
+    const files = await Promise.all(
+        references.map(async (image) => compressImageFileForUpload(dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) }))),
+    );
     files.forEach((file) => formData.append("image", file));
 
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
@@ -1086,7 +1090,10 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         };
     }
     if (config.apiMode === "chat" && !isZhipuImageModel(config.model)) {
-        const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
+        // Base64 内联同样受上游体积限制，超阈值先压一遍。
+        const inputImageDataUrls = references.length
+            ? await Promise.all(references.map(async (image) => compressImageDataUrlForUpload(await imageToDataUrl(image))))
+            : [];
         return {
             method: "POST",
             headers: jsonHeaders,
@@ -1094,7 +1101,9 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         };
     }
     if (config.apiMode === "responses" && !isZhipuImageModel(config.model)) {
-        const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
+        const inputImageDataUrls = references.length
+            ? await Promise.all(references.map(async (image) => compressImageDataUrlForUpload(await imageToDataUrl(image))))
+            : [];
         const body: Record<string, unknown> = {
             model: config.model,
             input: createResponsesInput(config, withSystemPrompt(config, prompt), inputImageDataUrls),

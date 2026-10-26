@@ -80,7 +80,9 @@ var lingzhiErrorHints = map[string]string{
 	"insufficient_quota":    "账户额度不足：请到灵智控制台充值或更换可用的线路分组",
 	"insufficient_balance":  "账户额度不足：请到灵智控制台充值后重试",
 	"rate_limit_exceeded":   "触发限流：请降低并发或稍后重试",
-	"invalid_request_error": "请求参数被上游拒绝：请对照灵智文档核对该模型的时长、分辨率、素材数量限制",
+	// invalid_request_error 是所有 OpenAI 兼容渠道都会返回的通用类型，
+	// 文案必须渠道中立，否则会把非灵智渠道的「图片过大」也误导成灵智参数问题。
+	"invalid_request_error": "请求参数被上游拒绝：常见原因是参考图/参考视频体积超限（如 file too large）、分辨率或时长越界、素材数量超额，请对照该渠道的模型文档核对",
 	// 灵智的业务错误带 type=BadRequest；参数类错误码是 InvalidParameter。
 	"badrequest":               "请求被上游拒绝：多为参数越界或素材不合规，请核对分辨率（2.5 最高 1080p）、时长（4~30 整数秒）、比例与素材数量",
 	"invalidparameter":         "参数不合法：2.5 最高 1080p（传 4k 会 400）、时长必须是 4~30 的整数秒、首帧任务 ratio 只能 adaptive",

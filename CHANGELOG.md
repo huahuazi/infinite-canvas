@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.10.6 - 2026-10-26
+
++ [修复] 生图报 `invalid request: file too large`：生图链路此前**没有任何体积收敛**，手机原图（3~8MB）原样上传，直接撞上游单图上限。现在超过 3.5MB 的参考图会在浏览器端按「先保分辨率降质量、再逐步缩尺寸」六级重绘压缩，压到阈值内再发送；未超阈值原样发出，不做无谓降质
++ [修复] 三类生图请求都覆盖到了：multipart 的 `/images/edits`、`apiMode=chat` 的 Base64 内联、`apiMode=responses` 的 Base64 内联
++ [修复] 错误提示误导：`invalid_request_error` 是所有 OpenAI 兼容渠道都会返回的通用类型，此前无条件贴上「请对照灵智文档核对」的字样，导致非灵智渠道（如 hub 的 gpt-image-2）的图片过大也显示成灵智参数问题。现已改为渠道中立文案，并点明「file too large = 素材体积超限」
+
 ## v0.10.5 - 2026-10-25
 
 + [修复] 视频任务完成后画布一直停在「正在创作 0%」：后端代理统一用 `{ code, msg, data }` 信封返回，而火山方舟分支的响应归一化没有先解包，`status` / `error` / `content.video_url` 全读在信封外层——任务其实已经失败（或成功）了，前端却拿到空状态，`canvasVideoTaskFailed` 认不出来就一直转圈。现在与 Gemini、Flatkey 分支保持一致，先解包再解析
