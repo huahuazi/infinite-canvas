@@ -528,10 +528,22 @@ func writeCanvasTaskMultipartFile(writer *multipart.Writer, field string, header
 	reader := io.Reader(file)
 	mimeType, extension := "", ""
 	if normalizeImage {
-		buffered := bufio.NewReaderSize(file, 512)
-		head, _ := buffered.Peek(512)
-		mimeType, extension = canvasTaskImageType(head)
-		reader = buffered
+		// 生图参考图先做体积收敛：上游对单张图有上限，手机原图直接发会被拒成
+		// `file too large`。前端 image-compress.ts 也压，但页面停留在旧 chunk 时
+		// 不会执行，所以这里必须兜底。
+		data, readErr := io.ReadAll(file)
+		if readErr != nil {
+			return readErr
+		}
+		if shrunken, ok := shrinkCanvasTaskImage(data, canvasTaskImageMaxBytes); ok {
+			mimeType, extension = "image/jpeg", ".jpg"
+			reader = bytes.NewReader(shrunken)
+		} else {
+			buffered := bufio.NewReaderSize(bytes.NewReader(data), 512)
+			head, _ := buffered.Peek(512)
+			mimeType, extension = canvasTaskImageType(head)
+			reader = buffered
+		}
 	}
 	var part io.Writer
 	if mimeType == "" {
