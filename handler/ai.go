@@ -67,7 +67,15 @@ func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if isClientVideoTaskID(id) {
-		OK(w, map[string]any{"id": id, "task_id": id, "object": "video", "status": "queued", "progress": 0})
+		// 占位号允许一段宽限期：提交与入库之间有时间差，立即判"不存在"会误报。
+		// 宽限期过后仍查不到，说明这次提交根本没到后端——必须明确报错，
+		// 否则前端会一直轮询到一个假的 queued，用户只看到「正在创作 0%」，
+		// 而后端日志干干净净（因为压根没收到提交），排查时完全无从下手。
+		if clientVideoTaskWithinGrace(id) {
+			OK(w, map[string]any{"id": id, "task_id": id, "object": "video", "status": "queued", "progress": 0})
+			return
+		}
+		Fail(w, "视频任务没有创建成功：后端没有收到这次提交，请检查网络后重试")
 		return
 	}
 	proxyAIGetRequest(w, r, "/videos/"+id)

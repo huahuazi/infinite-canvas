@@ -8,7 +8,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -216,6 +219,62 @@ func readVideoTaskSourceID(r *http.Request) string {
 
 func isClientVideoTaskID(id string) bool {
 	return strings.HasPrefix(strings.TrimSpace(id), "client_video_task_")
+}
+
+// 占位任务号的宽限期：前端提交前会先造一个本地号并立即开始轮询，
+// 此时后端可能还没入库，立即判定"不存在"会误报。
+// 宽限期必须大于「提交请求 + 写库」的正常耗时（实测 3~10 秒），留足余量。
+const clientVideoTaskGrace = 90 * time.Second
+
+// 没有时间戳可用的占位号（nanoid 形态）用首次查询时间兜底。
+var clientVideoTaskFirstSeen sync.Map
+
+// clientVideoTaskGraceHits 仅用于触发过期项清理，避免长期运行后 map 无限增长。
+var clientVideoTaskGraceHits atomic.Int64
+
+// clientVideoTaskTimestamp 从占位号里取出毫秒时间戳。
+// 形如 client_video_task_video-1793064095329-aqpwg 时能取到；nanoid 形态取不到。
+func clientVideoTaskTimestamp(id string) (int64, bool) {
+	start, digits := -1, 0
+	for i := 0; i <= len(id); i++ {
+		if i < len(id) && id[i] >= '0' && id[i] <= '9' {
+			if start < 0 {
+				start = i
+			}
+			digits++
+			continue
+		}
+		if digits == 13 && start >= 0 {
+			// 校验合理性，避免把 nanoid 里恰好 13 位的片段当成时间戳。
+			if ts, err := strconv.ParseInt(id[start:start+13], 10, 64); err == nil && ts > 1577836800000 && ts < 4102444800000 {
+				return ts, true
+			}
+		}
+		start, digits = -1, 0
+	}
+	return 0, false
+}
+
+// clientVideoTaskWithinGrace 判断这个占位号是否还在等后端入库。
+// 超出宽限期仍是查不到，只能说明提交请求压根没到后端。
+func clientVideoTaskWithinGrace(id string) bool {
+	now := time.Now()
+	if ts, ok := clientVideoTaskTimestamp(id); ok {
+		return now.Sub(time.UnixMilli(ts)) < clientVideoTaskGrace
+	}
+	actual, loaded := clientVideoTaskFirstSeen.LoadOrStore(id, now)
+	if !loaded {
+		return true
+	}
+	if clientVideoTaskGraceHits.Add(1)%256 == 0 {
+		clientVideoTaskFirstSeen.Range(func(key, value any) bool {
+			if now.Sub(value.(time.Time)) > clientVideoTaskGrace {
+				clientVideoTaskFirstSeen.Delete(key)
+			}
+			return true
+		})
+	}
+	return now.Sub(actual.(time.Time)) < clientVideoTaskGrace
 }
 
 func serveAIVideoTask(w http.ResponseWriter, r *http.Request, id string) bool {
