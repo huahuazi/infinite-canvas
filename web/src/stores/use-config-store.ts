@@ -19,6 +19,9 @@ export type LocalModelChannel = {
     // （如灵智的 seedance-2.5-guanfang-anmiao），但 Ark 接口只认火山真名
     //（doubao-seedance-2-5-260628）。key 是用户看到的名字，value 是发给上游的 model。
     modelAliases?: Record<string, string>;
+    // 显式声明的模型类型：text / image / video / audio。
+    // 模型名一直在变，靠关键词猜会失准，所以声明优先、猜测只做兜底。
+    modelCapabilities?: Record<string, string>;
     script?: string;
     scriptCapability?: ModelCapability;
 };
@@ -97,7 +100,7 @@ export type AiConfig = {
         workflowAgent: string;
     };
     localChannels: LocalModelChannel[];
-    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; modelAliases?: Record<string, string>; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
+    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; modelAliases?: Record<string, string>; modelCapabilities?: Record<string, string>; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
     syncStorageConfig: boolean;
     syncWebDAVStorageConfig: boolean;
     activeChannelId: string;
@@ -339,8 +342,20 @@ function isTextModelName(model: string) {
     return !isImageModelName(model) && !isVideoModelName(model) && !isAudioModelName(model);
 }
 
-export function modelMatchesCapability(model: string, capability?: ModelCapability, protocol = "") {
+const MODEL_CAPABILITIES: ModelCapability[] = ["text", "image", "video", "audio"];
+
+export function normalizeModelCapability(value: unknown): ModelCapability | "" {
+    const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+    return (MODEL_CAPABILITIES as string[]).includes(text) ? (text as ModelCapability) : "";
+}
+
+export function modelMatchesCapability(model: string, capability?: ModelCapability, protocol = "", declared?: string) {
     if (!capability) return true;
+    // 声明优先：后台/本地渠道里配了类型就以此为准，不再看模型名。
+    // 模型名会不断更新（deepseek-flash、gpt-image-2.5-sunburst…），
+    // 关键词表永远追不上，所以它只在没有声明时兜底。
+    const explicit = normalizeModelCapability(declared);
+    if (explicit) return explicit === capability;
     if (protocol === "gemini") {
         const value = model.toLowerCase();
         const video = /^models\/veo-|^veo-/.test(value);
@@ -357,18 +372,47 @@ export function modelMatchesCapability(model: string, capability?: ModelCapabili
     return isTextModelName(model);
 }
 
-export function filterModelsByCapability(models: string[], capability?: ModelCapability, protocol = "") {
-    return capability ? models.filter((model) => modelMatchesCapability(model, capability, protocol)) : models;
+/** 按模型名猜一个类型，仅用于界面预填（保存时以后台声明为准）。 */
+export function guessModelCapability(model: string, protocol = ""): ModelCapability {
+    const candidates: ModelCapability[] = ["video", "image", "audio"];
+    for (const capability of candidates) {
+        if (modelMatchesCapability(model, capability, protocol)) return capability;
+    }
+    return "text";
 }
 
-export function filterChannelModelsByCapability(channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[] }>, capability: ModelCapability, allowedModels?: string[]) {
+export function filterModelsByCapability(
+    models: string[],
+    capability?: ModelCapability,
+    protocol = "",
+    capabilities?: Record<string, string>,
+) {
+    return capability
+        ? models.filter((model) => modelMatchesCapability(model, capability, protocol, capabilities?.[model]))
+        : models;
+}
+
+export function filterChannelModelsByCapability(
+    channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[]; modelCapabilities?: Record<string, string> }>,
+    capability: ModelCapability,
+    allowedModels?: string[],
+) {
     const allowed = allowedModels ? new Set(allowedModels) : null;
-    return normalizeModelList(channels.flatMap((channel) => filterModelsByCapability(channel.models, capability, channel.protocol || ""))).filter((model) => !allowed || allowed.has(model));
+    return normalizeModelList(
+        channels.flatMap((channel) => filterModelsByCapability(channel.models, capability, channel.protocol || "", channel.modelCapabilities)),
+    ).filter((model) => !allowed || allowed.has(model));
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
     if (!capability) return config.models;
-    const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ protocol: channel.protocol, models: channel.models || [] })) : normalizeLocalChannels(config);
+    const channels =
+        config.channelMode === "remote"
+            ? config.publicChannels.map((channel) => ({
+                  protocol: channel.protocol,
+                  models: channel.models || [],
+                  modelCapabilities: channel.modelCapabilities,
+              }))
+            : normalizeLocalChannels(config);
     return filterChannelModelsByCapability(channels, capability, config.models);
 }
 

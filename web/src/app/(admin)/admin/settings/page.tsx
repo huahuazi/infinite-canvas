@@ -11,7 +11,7 @@ import { ChannelModelSelectorModal } from "@/components/channel-model-selector-m
 import { anmiaoChannelTips, arkChannelTips, flatkeyChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
 import { isAnmiaoChannel } from "@/lib/seedance-video";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
-import { useConfigStore } from "@/stores/use-config-store";
+import { guessModelCapability, useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 // 后台改完渠道 / 模型后必须立刻把前端 store 里的公开设置重新拉一次。
@@ -295,7 +295,7 @@ export default function AdminSettingsPage() {
         const nextChannelModels = collectChannelModels(nextChannels);
         const nextSettings = normalizeSettings({
             ...values,
-            public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: filterModels(values.public.modelChannel.availableModels, nextChannelModels) } },
+            public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: mergeModels(values.public.modelChannel.availableModels, nextChannelModels) } },
             private: { ...values.private, channels: nextChannels },
         });
         const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
@@ -914,6 +914,19 @@ export default function AdminSettingsPage() {
                             </Col>
                             <Col span={24}>
                                 <Form.Item
+                                    label="模型类型"
+                                    extra="决定这个模型出现在文字 / 图片 / 视频 / 音频哪个选择器里。留「自动」就按模型名猜——模型名会不断更新，猜不准或以后改名了，在这里指定一次即可，不会因为白名单没跟上而消失。"
+                                >
+                                    <ModelCapabilityEditor
+                                        models={(Form.useWatch("models", channelForm) as string[] | undefined) || []}
+                                        capabilities={(Form.useWatch("modelCapabilities", channelForm) as Record<string, string> | undefined) || {}}
+                                        protocol={channelProtocol || ""}
+                                        onChange={(next) => channelForm.setFieldValue("modelCapabilities", next)}
+                                    />
+                                </Form.Item>
+                            </Col>
+                            <Col span={24}>
+                                <Form.Item
                                     label="模型名映射"
                                     extra={isAnmiaoChannel(channelProtocol, channelForm.getFieldValue("baseUrl")) ? `${anmiaoChannelTips.modelAliases}\n${anmiaoChannelTips.limits}` : "可选。每行一条「前端模型名 = 上游模型名」，用于把中转站的计费 SKU 映射成上游真实模型名；两边同名时不需要填。"}
                                 >
@@ -1120,6 +1133,66 @@ function newAdminStorageProvider(type: AdminStorageProvider["type"], providers: 
 // 渠道抽屉的表单值：在 AdminModelChannel 基础上多一个用于编辑映射的纯文本字段。
 type ChannelFormValues = Partial<AdminModelChannel> & { modelAliasesText?: string };
 
+const CAPABILITY_OPTIONS = [
+    { label: "文字", value: "text" },
+    { label: "图片", value: "image" },
+    { label: "视频", value: "video" },
+    { label: "音频", value: "audio" },
+];
+
+const CAPABILITY_LABELS: Record<string, string> = { text: "文字", image: "图片", video: "视频", audio: "音频" };
+
+/**
+ * 渠道里每个模型一个类型下拉。
+ * 留「自动」表示不写进 modelCapabilities，由后端按模型名猜；
+ * 选了具体类型就固化下来，以后模型改名也不影响分组。
+ */
+function ModelCapabilityEditor({
+    models,
+    capabilities,
+    protocol,
+    onChange,
+}: {
+    models: string[];
+    capabilities: Record<string, string>;
+    protocol: string;
+    onChange: (next: Record<string, string>) => void;
+}) {
+    if (!models.length) {
+        return <Typography.Text type="secondary">先在上面选好模型，这里再逐个指定类型。</Typography.Text>;
+    }
+    const setOne = (model: string, value: string) => {
+        const next = { ...capabilities };
+        if (value === "auto") delete next[model];
+        else next[model] = value;
+        onChange(next);
+    };
+    return (
+        <Space direction="vertical" size={6} style={{ width: "100%" }}>
+            {models.map((model) => {
+                const declared = capabilities[model] || "";
+                const guessed = CAPABILITY_LABELS[guessModelCapability(model, protocol)] || "文字";
+                return (
+                    <Flex key={model} align="center" gap={8}>
+                        <Typography.Text style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }} title={model}>
+                            {model}
+                        </Typography.Text>
+                        <Select
+                            style={{ width: 148 }}
+                            value={declared || "auto"}
+                            onChange={(value) => setOne(model, value)}
+                            options={[
+                                { label: declared ? "自动（按名字猜）" : `自动（当前识别为${guessed}）`, value: "auto" },
+                                ...CAPABILITY_OPTIONS,
+                            ]}
+                        />
+                    </Flex>
+                );
+            })}
+        </Space>
+    );
+}
+
 function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChannel {
     return {
         id: item.id || "",
@@ -1203,6 +1276,22 @@ function uniqueModels(models: string[]) {
 function filterModels(models: string[], options: string[]) {
     const optionSet = new Set(options);
     return uniqueModels(models).filter((model) => optionSet.has(model));
+}
+
+/**
+ * 渠道模型变化时维护「系统可用模型」：删掉已不存在的，同时把新增的并进来。
+ * 之前只做过滤（只删不增），新增渠道的模型永远进不了这个列表，
+ * 前端选择器就看不到它——典型现象是加了 deepseek 渠道，画布仍提示
+ * 「没有可用的文字模型」。新模型默认开放，管理员仍可在这里取消勾选。
+ */
+function mergeModels(current: string[], options: string[]) {
+    const optionSet = new Set(options);
+    const kept = uniqueModels(current).filter((model) => optionSet.has(model));
+    const keptSet = new Set(kept);
+    for (const model of uniqueModels(options)) {
+        if (!keptSet.has(model)) kept.push(model);
+    }
+    return kept;
 }
 
 function modelSummary(models: string[]) {

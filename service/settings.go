@@ -189,10 +189,17 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 		setting.Auth.AllowRegister = &enabled
 	}
 	setting.ModelChannel.AvailableModels = filterEnabledModels(setting.ModelChannel.AvailableModels, enabledChannelModels(channels))
-	setting.ModelChannel.DefaultTextModel = repairDefaultModel(setting.ModelChannel.DefaultTextModel, setting.ModelChannel.AvailableModels, isTextModelName)
-	setting.ModelChannel.DefaultImageModel = repairDefaultModel(setting.ModelChannel.DefaultImageModel, setting.ModelChannel.AvailableModels, isImageModelName)
-	setting.ModelChannel.DefaultVideoModel = repairDefaultModel(setting.ModelChannel.DefaultVideoModel, setting.ModelChannel.AvailableModels, isVideoModelName)
-	setting.ModelChannel.DefaultModel = repairDefaultModel(setting.ModelChannel.DefaultModel, setting.ModelChannel.AvailableModels, isTextModelName)
+	// 默认值按「显式类型」校验：只有真的属于该类型才算合格，
+	// 否则会把视频模型塞进 defaultTextModel 这种错配长期留在配置里。
+	matchesCapability := func(want string) func(string) bool {
+		return func(modelName string) bool {
+			return modelCapability(channels, modelName) == want
+		}
+	}
+	setting.ModelChannel.DefaultTextModel = repairDefaultModel(setting.ModelChannel.DefaultTextModel, setting.ModelChannel.AvailableModels, matchesCapability(capabilityText))
+	setting.ModelChannel.DefaultImageModel = repairDefaultModel(setting.ModelChannel.DefaultImageModel, setting.ModelChannel.AvailableModels, matchesCapability(capabilityImage))
+	setting.ModelChannel.DefaultVideoModel = repairDefaultModel(setting.ModelChannel.DefaultVideoModel, setting.ModelChannel.AvailableModels, matchesCapability(capabilityVideo))
+	setting.ModelChannel.DefaultModel = repairDefaultModel(setting.ModelChannel.DefaultModel, setting.ModelChannel.AvailableModels, matchesCapability(capabilityText))
 	return setting
 }
 
@@ -239,8 +246,31 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		if setting.Channels[i].Timeout <= 0 {
 			setting.Channels[i].Timeout = 600
 		}
+		// 类型表补全到与 models 一致。放在这里而不是只放在单个渠道的保存路径里，
+		// 是为了保证「整包保存」和「读出来」两条路都拿到完整的 modelCapabilities——
+		// 否则前端会退回按模型名猜，新模型照样可能被分错类。
+		setting.Channels[i] = normalizeModelCapabilities(setting.Channels[i])
 	}
 	return setting
+}
+
+// normalizeModelCapabilities 只处理类型表：声明合法的保留（并归一化大小写），
+// 缺失的按模型名猜一次，已删模型的残留清掉。
+func normalizeModelCapabilities(channel model.ModelChannel) model.ModelChannel {
+	capabilities := make(map[string]string, len(channel.Models))
+	for _, modelName := range channel.Models {
+		name := strings.TrimSpace(modelName)
+		if name == "" {
+			continue
+		}
+		if declared := normalizeModelCapability(channel.ModelCapabilities[name]); declared != "" {
+			capabilities[name] = declared
+			continue
+		}
+		capabilities[name] = guessModelCapability(name)
+	}
+	channel.ModelCapabilities = capabilities
+	return channel
 }
 
 func hidePrivateAPIKeys(settings model.Settings) model.Settings {
@@ -542,15 +572,20 @@ func uniqueModelNames(models []string) []string {
 	return result
 }
 
-func repairDefaultModel(current string, models []string, preferred func(string) bool) string {
+// repairDefaultModel 从候选里挑一个合适的默认模型。
+// check 返回这个模型「作为该槽位是否合格」，不合格的当前值会被换掉——
+// 之前的实现只校验「在不在列表里」，导致 defaultTextModel 可以长期指向一个视频模型。
+func repairDefaultModel(current string, models []string, check func(string) bool) string {
 	current = strings.TrimSpace(current)
-	for _, item := range models {
-		if item == current {
-			return current
+	if current != "" {
+		for _, item := range models {
+			if item == current && check(item) {
+				return current
+			}
 		}
 	}
 	for _, item := range models {
-		if preferred(item) {
+		if check(item) {
 			return item
 		}
 	}
@@ -558,6 +593,29 @@ func repairDefaultModel(current string, models []string, preferred func(string) 
 		return models[0]
 	}
 	return ""
+}
+
+const (
+	capabilityText  = "text"
+	capabilityImage = "image"
+	capabilityVideo = "video"
+	capabilityAudio = "audio"
+)
+
+// normalizeModelCapability 把用户填的类型收敛到四个合法值，非法/空值返回空串。
+func normalizeModelCapability(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case capabilityText:
+		return capabilityText
+	case capabilityImage:
+		return capabilityImage
+	case capabilityVideo:
+		return capabilityVideo
+	case capabilityAudio:
+		return capabilityAudio
+	default:
+		return ""
+	}
 }
 
 func isVideoModelName(modelName string) bool {
@@ -570,8 +628,42 @@ func isImageModelName(modelName string) bool {
 	return strings.Contains(name, "seedream") || strings.Contains(name, "gpt-image") || strings.Contains(name, "image")
 }
 
+func isAudioModelName(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.Contains(name, "tts") || strings.Contains(name, "speech") ||
+		strings.Contains(name, "audio") || strings.Contains(name, "whisper")
+}
+
 func isTextModelName(modelName string) bool {
-	return !isImageModelName(modelName) && !isVideoModelName(modelName)
+	return !isImageModelName(modelName) && !isVideoModelName(modelName) && !isAudioModelName(modelName)
+}
+
+// guessModelCapability 按模型名猜类型。只在没有显式声明时兜底——
+// 模型名一直在变（deepseek-flash、gpt-image-2.5-sunburst……），猜不能当主判据。
+func guessModelCapability(modelName string) string {
+	switch {
+	case isVideoModelName(modelName):
+		return capabilityVideo
+	case isImageModelName(modelName):
+		return capabilityImage
+	case isAudioModelName(modelName):
+		return capabilityAudio
+	default:
+		return capabilityText
+	}
+}
+
+// modelCapability 返回模型的能力类型：渠道里显式声明优先，没声明才回退到猜测。
+func modelCapability(channels []model.ModelChannel, modelName string) string {
+	name := strings.TrimSpace(modelName)
+	for _, channel := range channels {
+		if declared, ok := channel.ModelCapabilities[name]; ok {
+			if capability := normalizeModelCapability(declared); capability != "" {
+				return capability
+			}
+		}
+	}
+	return guessModelCapability(name)
 }
 
 func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
@@ -584,6 +676,9 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	if channel.Models == nil {
 		channel.Models = []string{}
 	}
+	// 类型表补全到与 models 一致：缺失的按模型名猜一次并固化下来。
+	// 这样即使调用方（比如直接打 API）没传这个字段，存下来也是完整的。
+	channel = normalizeModelCapabilities(channel)
 	if channel.Weight <= 0 {
 		channel.Weight = 1
 	}
@@ -1295,16 +1390,17 @@ func publicChannelInfos(channels []model.ModelChannel) []model.PublicModelChanne
 			continue
 		}
 		result = append(result, model.PublicModelChannelInfo{
-			ID:           channel.ID,
-			Protocol:     channel.Protocol,
-			Name:         channel.Name,
-			BaseURL:      channel.BaseURL,
-			Models:       append([]string{}, channel.Models...),
-			ModelAliases: cloneStringMap(channel.ModelAliases),
-			Weight:       channel.Weight,
-			Timeout:      channel.Timeout,
-			Enabled:      channel.Enabled,
-			Remark:       channel.Remark,
+			ID:                channel.ID,
+			Protocol:          channel.Protocol,
+			Name:              channel.Name,
+			BaseURL:           channel.BaseURL,
+			Models:            append([]string{}, channel.Models...),
+			ModelAliases:      cloneStringMap(channel.ModelAliases),
+			ModelCapabilities: cloneStringMap(channel.ModelCapabilities),
+			Weight:            channel.Weight,
+			Timeout:           channel.Timeout,
+			Enabled:           channel.Enabled,
+			Remark:            channel.Remark,
 		})
 	}
 	return result

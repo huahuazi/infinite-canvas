@@ -25,10 +25,14 @@ type ModelChannel struct {
 	// 但 Ark 接口只认火山真名（如 doubao-seedance-2-5-260628）。
 	// key 是用户在前端看到的名字，value 是发给上游的 model；两边同名时无需配置。
 	ModelAliases map[string]string `json:"modelAliases,omitempty"`
-	Weight       int               `json:"weight"`
-	Timeout      int               `json:"timeout"`
-	Enabled      bool              `json:"enabled"`
-	Remark       string            `json:"remark"`
+	// ModelCapabilities 显式声明每个模型的类型：text / image / video / audio。
+	// 模型名一直在变（deepseek-flash、gpt-image-2.5-sunburst……），靠关键词猜迟早失准，
+	// 所以以这里的声明为准；没有声明的模型才回退到关键词猜测（兼容未迁移的旧配置）。
+	ModelCapabilities map[string]string `json:"modelCapabilities,omitempty"`
+	Weight            int               `json:"weight"`
+	Timeout           int               `json:"timeout"`
+	Enabled           bool              `json:"enabled"`
+	Remark            string            `json:"remark"`
 }
 
 // ModelCost 模型算力点配置。
@@ -69,10 +73,13 @@ type PublicModelChannelInfo struct {
 	// ModelAliases 随公开信息下发，前端在本地渠道直连场景需要按同一套映射改写 model，
 	// 否则「后台测试通过但生成 400」的问题会换个渠道再出现一次。
 	ModelAliases map[string]string `json:"modelAliases,omitempty"`
-	Weight       int                `json:"weight"`
-	Timeout      int                `json:"timeout"`
-	Enabled      bool               `json:"enabled"`
-	Remark       string             `json:"remark"`
+	// ModelCapabilities 一并下发：前端要靠它把模型分到文字 / 图片 / 视频 / 音频选择器，
+	// 只按模型名猜会在新模型上失准。
+	ModelCapabilities map[string]string `json:"modelCapabilities,omitempty"`
+	Weight            int               `json:"weight"`
+	Timeout           int               `json:"timeout"`
+	Enabled           bool              `json:"enabled"`
+	Remark            string            `json:"remark"`
 }
 
 // PublicSetting 公开配置。

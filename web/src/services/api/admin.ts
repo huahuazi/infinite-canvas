@@ -189,6 +189,8 @@ export type AdminModelChannel = {
     //（如灵智的 seedance-2.5-guanfang-anmiao），但 Ark 接口只认火山真名
     //（doubao-seedance-2-5-260628）。
     modelAliases?: Record<string, string>;
+    // 模型名 → text / image / video / audio。显式声明的类型优先于按名字猜。
+    modelCapabilities?: Record<string, string>;
     weight: number;
     timeout: number;
     enabled: boolean;

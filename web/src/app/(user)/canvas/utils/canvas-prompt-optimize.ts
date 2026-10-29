@@ -12,7 +12,7 @@
 import { createImageThumbnail } from "@/lib/image-thumbnail";
 import { getDataUrlByteSize } from "@/lib/image-utils";
 import { requestImageQuestion, type ChatCompletionMessage } from "@/services/api/image";
-import type { AiConfig } from "@/stores/use-config-store";
+import { modelMatchesCapability, type AiConfig } from "@/stores/use-config-store";
 import type { CanvasResourceReference } from "./canvas-resource-references";
 
 const MAX_REFERENCE_IMAGES = 4;
@@ -198,13 +198,6 @@ export function isReferenceImageTooLarge(dataUrl: string) {
     return getDataUrlByteSize(dataUrl) > MAX_REFERENCE_IMAGE_BYTES;
 }
 
-const NON_TEXT_MODEL_KEYWORDS = ["image", "vision-", "video", "seedance", "kling", "sora", "veo", "hailuo", "wan/", "tts", "speech", "audio", "whisper", "embed", "rerank", "upscale", "banana"];
-
-function isTextLikeModel(model: string) {
-    const value = model.toLowerCase();
-    return !NON_TEXT_MODEL_KEYWORDS.some((keyword) => value.includes(keyword));
-}
-
 /**
  * 在当前渠道模式下，找出真正提供这个模型的渠道 id。
  * 找不到时返回空串 —— 后端会按模型自动挑渠道，比塞一个对不上的 id 更安全。
@@ -231,9 +224,32 @@ export function resolvePromptOptimizeConfig(effective: AiConfig, raw: AiConfig):
         return { ...effective, model: textModel, textModel, textChannelId: channelId, activeChannelId: channelId || effective.activeChannelId };
     }
 
+    // 云端模式下渠道在 publicChannels 里，只翻 localChannels 的话后台配好的文字模型
+    // 永远找不到，画布会一直提示「没有可用的文字模型」。
+    const remote = raw.channelMode === "remote";
+    if (remote) {
+        for (const channel of raw.publicChannels || []) {
+            const model = (channel.models || []).find((item) =>
+                modelMatchesCapability(item, "text", channel.protocol || "", channel.modelCapabilities?.[item]),
+            );
+            if (!model) continue;
+            return {
+                ...effective,
+                channelMode: "remote",
+                model,
+                textModel: model,
+                textChannelId: channel.id || "",
+                activeChannelId: channel.id || effective.activeChannelId,
+            };
+        }
+        return null;
+    }
+
     const channels = raw.localChannels || [];
     for (const channel of channels) {
-        const model = (channel.models || []).find((item) => isTextLikeModel(item));
+        const model = (channel.models || []).find((item) =>
+            modelMatchesCapability(item, "text", channel.protocol || "", channel.modelCapabilities?.[item]),
+        );
         if (!model) continue;
         return {
             ...effective,
