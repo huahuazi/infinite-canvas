@@ -179,3 +179,88 @@ func TestPublicMirrorSkipsUnknownProviders(t *testing.T) {
 		t.Fatalf("providers = %v，期望只剩 catbox", providers)
 	}
 }
+
+// 默认顺序必须是 2026-11 实测可用的两家：x0at → uguu。
+// 旧的 catbox / 0x0st / litterbox / tmpfiles 已集体失效，留在默认值里只会白等超时。
+func TestPublicMirrorDefaultProviders(t *testing.T) {
+	withMirrorConfig(t, "", "fallback")
+	providers := PublicMirrorProviders()
+	if len(providers) != 2 || providers[0] != "x0at" || providers[1] != "uguu" {
+		t.Fatalf("默认顺序 = %v，期望 [x0at uguu]", providers)
+	}
+}
+
+// x0.at 是 0x0.st 的姊妹站：单 file 字段 + 纯文本直链。
+func TestUploadToPublicMirrorX0At(t *testing.T) {
+	withMirrorConfig(t, "x0at", "fallback")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Errorf("解析 multipart 失败: %v", err)
+		}
+		if _, _, err := r.FormFile("file"); err != nil {
+			t.Errorf("x0.at 必须用 file 字段: %v", err)
+		}
+		_, _ = w.Write([]byte("https://x0.at/abc.mp4\n"))
+	}))
+	defer server.Close()
+	withMirrorEndpoint(t, "x0at", server.URL)
+
+	result, err := UploadToPublicMirror(context.Background(), "ref.mp4", "video/mp4", []byte("fake"))
+	if err != nil {
+		t.Fatalf("上传失败: %v", err)
+	}
+	if result.URL != "https://x0.at/abc.mp4" || result.Provider != "x0at" {
+		t.Fatalf("结果不对: %+v", result)
+	}
+}
+
+// uguu 的字段名是 files[]（带方括号），写成 files 会被上游拒绝；
+// 另外它承诺约 3 小时保留，返回里应当带出 expiresIn。
+func TestUploadToPublicMirrorUguu(t *testing.T) {
+	withMirrorConfig(t, "uguu", "fallback")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Errorf("解析 multipart 失败: %v", err)
+		}
+		if _, _, err := r.FormFile("files[]"); err != nil {
+			t.Errorf("uguu 必须用 files[] 字段: %v", err)
+		}
+		_, _ = w.Write([]byte("https://n.uguu.se/abc.mp4\n"))
+	}))
+	defer server.Close()
+	withMirrorEndpoint(t, "uguu", server.URL)
+
+	result, err := UploadToPublicMirror(context.Background(), "ref.mp4", "video/mp4", []byte("fake"))
+	if err != nil {
+		t.Fatalf("上传失败: %v", err)
+	}
+	if result.URL != "https://n.uguu.se/abc.mp4" || result.Provider != "uguu" {
+		t.Fatalf("结果不对: %+v", result)
+	}
+	if result.ExpiresIn != 3*3600 {
+		t.Fatalf("expiresIn = %d，期望 10800", result.ExpiresIn)
+	}
+}
+
+// 新顺序下第一家失败时要能切到第二家（x0at 挂了走 uguu）。
+func TestUploadToPublicMirrorFallbackX0AtToUguu(t *testing.T) {
+	withMirrorConfig(t, "x0at,uguu", "fallback")
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusBadGateway)
+	}))
+	defer broken.Close()
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("https://n.uguu.se/ok.mp4"))
+	}))
+	defer healthy.Close()
+	withMirrorEndpoint(t, "x0at", broken.URL)
+	withMirrorEndpoint(t, "uguu", healthy.URL)
+
+	result, err := UploadToPublicMirror(context.Background(), "ref.mp4", "video/mp4", []byte("fake"))
+	if err != nil {
+		t.Fatalf("应回退成功，实际失败: %v", err)
+	}
+	if result.Provider != "uguu" {
+		t.Fatalf("provider = %q，期望 uguu", result.Provider)
+	}
+}

@@ -59,7 +59,19 @@ func (err *PublicMirrorError) Error() string {
 }
 
 // publicMirrorEndpoints 独立成变量，测试里可以指向 httptest。
+//
+// 2026-11-02 实测结论（决定了默认顺序）：
+//   - x0.at    可用，512MB、保留 30~365 天、国内直连约 0.6MB/s、512MB 上限最宽
+//   - uguu.se  可用，128MB、约 3 小时、国内直连约 0.5MB/s、HEAD 正常
+//   - catbox   全站暂停上传（Uploads paused until I can resolve storage issues）
+//   - litterbox 返回 Invalid uploader（与 catbox 同源，一并失效）
+//   - 0x0.st   已关闭（公告：被 AI 机器人滥用，no ETA）
+//   - tmpfiles 直链改为 /dl/<时间戳>.<hash>/<id>/<name>，旧解析会 302 回预览页
+//
+// 失效的四家实现保留：对方恢复后改一行配置就能用回来；未知名字本来就会被忽略。
 var publicMirrorEndpoints = map[string]string{
+	"x0at":      "https://x0.at",
+	"uguu":      "https://uguu.se/upload?output=text",
 	"catbox":    "https://catbox.moe/user/api.php",
 	"litterbox": "https://litterbox.catbox.moe/resources/internals/api.php",
 	"0x0st":     "https://0x0.st",
@@ -86,8 +98,13 @@ func newPublicMirrorProvider(name string) (publicMirrorProvider, bool) {
 	case "litterbox":
 		// 1h 够上游拉取；太长等于把素材长期公开。
 		return publicMirrorProvider{name: name, endpoint: endpoint, fileField: "fileToUpload", fields: map[string]string{"reqtype": "fileupload", "time": "1h"}, expiresIn: 3600, parse: parsePlainMirrorURL}, true
-	case "0x0st":
+	case "0x0st", "x0at":
+		// x0.at 是 0x0.st 的姊妹站，协议完全一致：file 字段 + 纯文本直链。
 		return publicMirrorProvider{name: name, endpoint: endpoint, fileField: "file", parse: parsePlainMirrorURL}, true
+	case "uguu":
+		// uguu 默认返回 JSON，只有带 output=text 时才回一行纯文本 URL；
+		// 字段名固定为 files[]（带方括号），写成 files 会被拒。
+		return publicMirrorProvider{name: name, endpoint: endpoint, fileField: "files[]", expiresIn: 3 * 3600, parse: parsePlainMirrorURL}, true
 	case "tmpfiles":
 		return publicMirrorProvider{name: name, endpoint: endpoint, fileField: "file", expiresIn: 3600, parse: parseTmpfilesURL}, true
 	default:
@@ -112,7 +129,9 @@ func PublicMirrorProviders() []string {
 	}
 	raw := strings.TrimSpace(config.Cfg.PublicMirrorProviders)
 	if raw == "" {
-		raw = "catbox,0x0st,litterbox,tmpfiles"
+		// 默认只用 2026-11 实测可用的两家；旧的 catbox / 0x0st / litterbox / tmpfiles
+		// 已集体失效，留在默认列表里只会让每次兜底多等几轮超时。
+		raw = "x0at,uguu"
 	}
 	result := []string{}
 	seen := map[string]bool{}
@@ -186,7 +205,9 @@ func (provider publicMirrorProvider) upload(ctx context.Context, filename string
 	if contentType != "" {
 		request.Header.Set("X-Content-Type", contentType)
 	}
-	client := &http.Client{Timeout: 90 * time.Second}
+	// 超时给到 300 秒：参考视频上限 50MB，而这些托管都在境外，
+	// 国内直连实测只有 0.5~0.7MB/s，90 秒传不完一个稍大的视频。
+	client := &http.Client{Timeout: 300 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
 		return "", err

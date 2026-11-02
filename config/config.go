@@ -21,8 +21,9 @@ type Config struct {
 	DatabaseDSN    string `env:"DATABASE_DSN" envDefault:"data/infinite-canvas.db"`
 	PublicBaseURL  string `env:"PUBLIC_BASE_URL"`
 	// 公共直链镜像：自建出口不可用时，把素材转存到公共文件托管换一条上游能拉的直链。
-	// PUBLIC_MIRROR_MODE：off（关闭）/ fallback（默认，仅自建出口失败时兜底）。
-	PublicMirrorProviders string `env:"PUBLIC_MIRROR_PROVIDERS" envDefault:"catbox,0x0st,litterbox,tmpfiles"`
+	// 默认只列 2026-11 实测可用的两家（x0.at / uguu.se）：
+	// catbox、litterbox、0x0.st、tmpfiles 当时均已停止或失效，留在默认列表只会白等超时。
+	PublicMirrorProviders string `env:"PUBLIC_MIRROR_PROVIDERS" envDefault:"x0at,uguu"`
 	PublicMirrorMode      string `env:"PUBLIC_MIRROR_MODE" envDefault:"fallback"`
 	// 是否允许把「生成结果」也镜像到公共托管（默认关闭：成片可能含客户素材）。
 	PublicMirrorResults bool   `env:"PUBLIC_MIRROR_RESULTS" envDefault:"false"`

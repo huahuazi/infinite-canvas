@@ -5,7 +5,7 @@ import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio,
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
 import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isAnmiaoChannel, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
-import { isA6APIBaseUrl } from "@/lib/model-channel";
+import { isA6APIBaseUrl, isDepthVideoModelName, isHuggingFaceBaseUrl, isWaveSpeedBaseUrl } from "@/lib/model-channel";
 import { normalizeA6APIVideoSeconds } from "@/lib/a6api-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
@@ -56,6 +56,10 @@ function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
     // A6API 是标准 OpenAI 视频协议（/v1/videos），即使挂的是 seedance 模型，
     // 也不能被下面的模型名判定带进 /contents/generations/tasks。
     if (protocol === "a6api") return false;
+    // 深度视频渠道是各自独立的协议。WaveSpeed 的地址天然带 /api/v3，
+    // 不排除会被下面的 isArkBaseUrl 判定抢走，请求打到 /contents/generations/tasks 必 404。
+    if (protocol === "wavespeed" || protocol === "huggingface") return false;
+    if (isDepthVideoRequest(config)) return false;
     // 后台渠道显式选择「火山方舟（Ark）」或「灵智」协议时直接判定，不必再猜接口地址。
     // 灵智是 Ark 的一种方言，任务路径同样是 /contents/generations/tasks。
     if (protocol === "ark" || protocol === "anmiao") return true;
@@ -111,7 +115,64 @@ function isA6APIVideoRequest(config: AiConfig) {
     return isA6APIBaseUrl(channel?.baseUrl || config.baseUrl || "");
 }
 
-function aiVideoPollUrl(config: AiConfig, model: string, id: string) {    if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
+// 深度视频（WaveSpeedAI / Hugging Face Space）。
+// 跑的是真实单目深度估计（Video Depth Anything），不是让视频模型「照着提示词画深度图」，
+// 因此请求体、参数与轮询都独立于普通视频生成。
+//
+// 为什么强制走服务端代理（重要，别再误以为是跨域）：
+//   1. 密钥不能落浏览器。直连必须把 access key / hf token 交给前端，
+//      local 模式下明文存在 localStorage，一次 XSS 就漏光，且无法按用户回收。
+//   2. Hugging Face 是「上传 → 取 event_id → 监听 SSE」三步，产物还是 Space 的临时文件，
+//      必须由后端转存到 data/reference-media，否则 Space 一重启画面就 404。
+//   3. 日志、算力点、错误归一化统一收口在后端。
+// 实测两家的 CORS 都是放行的（WaveSpeed 返回 access-control-allow-origin: *，
+// HF Space 会回显 Origin），所以这纯粹是密钥与产物管理的架构选择，不是浏览器限制。
+export function isDepthVideoRequest(config: AiConfig) {
+    const protocol = channelProtocolForConfig(config);
+    if (protocol === "wavespeed" || protocol === "huggingface") return true;
+    // 显式选了别的协议时不要被地址反向覆盖（与后端的判定顺序保持一致）。
+    if (protocol) return false;
+    const channel = activeChannelForConfig(config);
+    const baseUrl = channel?.baseUrl || config.baseUrl || "";
+    return isWaveSpeedBaseUrl(baseUrl) || isHuggingFaceBaseUrl(baseUrl);
+}
+
+// 深度视频的输出分辨率直接复用画布已有的清晰度选项。
+// Hugging Face 的 Space 单次只有 240 秒 GPU：518 与模型内部 input_size 一致，
+// 跑得最快也最不容易超时，所以没有清晰度或选不中档位时都回落到 518。
+function depthVideoMaxRes(vquality: string | undefined) {
+    const text = String(vquality || "").toLowerCase();
+    if (text.includes("1080")) return 1080;
+    if (text.includes("720")) return 720;
+    if (text.includes("480")) return 480;
+    return 518;
+}
+
+// 深度视频请求体：模型 + 源视频，外加 Hugging Face 的四个推理参数。
+// WaveSpeed 只认 video 一个字段，其余参数发上去会被忽略甚至报错，所以按渠道分开拼。
+async function createDepthVideoRequestBody(config: AiConfig, model: string, input: Required<VideoReferenceInput>): Promise<Record<string, unknown>> {
+    const source = input.videoReferences[0];
+    if (!source) throw new VideoRequestError("深度视频需要先挂一个视频素材：深度是从已有画面估计空间结构，不能凭空生成");
+    const channel = activeChannelForConfig(config);
+    const body: Record<string, unknown> = {
+        model: upstreamModelNameForChannel(channel, model),
+        // WaveSpeed 与 Space 都只接受可访问的视频地址，不接受本地文件或 base64。
+        video: await arkReferenceVideoUrl(source),
+    };
+    if (channelProtocolForConfig(config) === "huggingface") {
+        // 参数顺序由 Space 的端点签名固定：max_len / target_fps / max_res / grayscale
+        body.max_len = -1;
+        body.target_fps = -1;
+        body.max_res = depthVideoMaxRes(config.vquality);
+        body.grayscale = true;
+    }
+    return body;
+}
+
+function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
+    // 深度视频没有各自的 REST 查询接口，统一由后端按渠道分发。
+    if (isDepthVideoRequest(config)) return `/api/v1/videos/${encodeURIComponent(id)}`;
+    if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
         const channel = activeChannelForConfig(config);
         return geminiOperationUrl(channel?.baseUrl || config.baseUrl, id);
     }
@@ -188,7 +249,14 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
         const headers = { ...aiHeaders(config), ...(accountProxy && createOptions.clientTaskId ? { "X-Client-Video-Task-ID": createOptions.clientTaskId } : {}), ...(accountProxy && createOptions.source ? { "X-Video-Task-Source": createOptions.source } : {}), ...(accountProxy && createOptions.sourceId ? { "X-Video-Task-Source-ID": createOptions.sourceId } : {}) };
         const directProvider = !accountProxy ? directAIProviderForConfig(config) : null;
         const channel = localChannelForActiveModel(config);
-        const createUrl = !accountProxy && isGeminiConfig(config, model)
+        // 深度视频两家都只能走服务端代理：密钥不能下发到浏览器，
+        // Hugging Face 还要先 multipart 上传再监听 SSE。
+        if (isDepthVideoRequest(config) && !accountProxy) {
+            throw new VideoRequestError("深度视频必须通过服务端调用：渠道密钥不能放在浏览器里，且任务需要后端转存产物。请登录后使用云端渠道。");
+        }
+        const createUrl = isDepthVideoRequest(config)
+            ? "/api/v1/videos"
+            : !accountProxy && isGeminiConfig(config, model)
             ? geminiActionUrl(channel?.baseUrl || config.baseUrl, model, "predictLongRunning")
             : !accountProxy && isMiniMaxH3Config(config, model)
                 ? miniMaxApiUrl(config, "/v2/video_generation")
@@ -389,6 +457,7 @@ async function createAgnesVideoV25RequestBody(config: AiConfig, model: string, p
 
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
     const size = normalizeVideoSize(config.size);
+    if (isDepthVideoRequest(config)) return createDepthVideoRequestBody(config, model, input);
     if (isA6APIVideoRequest(config)) return createA6APIVideoRequestBody(config, model, prompt, input);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return createGeminiVeoRequestBody(config, model, prompt, input);
     if (isGrok2APIVideoConfig(config, model)) return createGrok2APIVideoRequestBody(config, model, prompt, input);
@@ -1190,7 +1259,7 @@ async function uploadArkReferenceToPublicUrl(blob: Blob, filename: string, allow
         const selfHosted = await uploadReferenceToSelfHosted(blob, filename).catch((error) => {
             console.warn("本机素材出口不可用：", error);
             if (allowPublicMirror) {
-                mirror.update("本机素材出口不可用，正在改用公共直链（catbox / 0x0.st / litterbox / tmpfiles）…");
+                mirror.update("本机素材出口不可用，正在改用公共直链（x0.at / uguu.se）…");
             }
             return "";
         });

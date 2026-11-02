@@ -85,6 +85,12 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		credits *= readAIRequestCount(body, contentType)
 	}
+	// Hugging Face 的深度视频跑在 Gradio 协议上（上传文件 → 取 event_id → SSE 监听），
+	// 没有 /videos + /videos/{id} 的任务语义，必须在路径改写之前单独分流。
+	if service.IsHuggingFaceChannel(channel) {
+		proxyHuggingFaceDepthVideoTask(w, r, user, userChannelID, channel, modelName, body, credits, startedAt)
+		return
+	}
 	upstreamPath := resolveAIProxyPath(channel, modelName, "/videos")
 	// 灵智的文档站（lk666.ai）只托管网页，任何 /api 请求都会返回 200 + HTML，
 	// 提前拦下并说明正确的 API 域名，否则现场只剩一句「视频接口没有返回任务 ID」。
@@ -352,6 +358,23 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
 	}
+	// Hugging Face 的深度视频没有 REST 查询接口，靠 SSE 监听 event_id。
+	if service.IsHuggingFaceChannel(channel) {
+		update, payload, pollErr := pollHuggingFaceDepth(channel, task.UpstreamTaskID)
+		if len(payload) > 0 {
+			saveAIProxyLog(aiLogContext{
+				StartedAt:       time.Now(),
+				Endpoint:        "/videos/" + task.UpstreamTaskID,
+				Method:          http.MethodGet,
+				Model:           task.Model,
+				Channel:         channel,
+				UserID:          task.UserID,
+				UserDisplayName: task.UserDisplayName,
+				RequestBody:     fmt.Sprintf(`{"eventId":%q}`, task.UpstreamTaskID),
+			}, http.StatusOK, string(payload), firstNonEmpty(update.Error, ""))
+		}
+		return update, pollErr
+	}
 	pollID := firstNonEmpty(task.UpstreamTaskID, task.ID)
 	if isAgnesVideoModel(task.Model) && strings.HasPrefix(task.UpstreamVideoID, "video_") {
 		pollID = task.UpstreamVideoID
@@ -422,6 +445,11 @@ func normalizeVideoCreateBody(body []byte, contentType string, modelName string,
 		normalized, err := service.StripGeminiModelField(body, contentType)
 		return normalized, contentType, err
 	}
+	// WaveSpeed 的深度模型只收 {"video": "<url>"}，画布发来的 OpenAI 风格字段一个都不认，
+	// 必须整包替换而不是打补丁，否则会把 prompt/size/seconds 一起发上去被拒。
+	if service.IsWaveSpeedChannel(channel) {
+		return normalizeWaveSpeedDepthBody(body, contentType)
+	}
 	return rewriteModelChannelRequestBody(body, contentType, channel, modelName, func(body []byte) ([]byte, string, error) {
 		if isKIEChannel(channel, modelName) && upstreamPath == "/jobs/createTask" {
 			return normalizeKIEVideoBody(body, contentType, modelName, channel)
@@ -449,6 +477,11 @@ func transformVideoCreatePayload(payload []byte, request *http.Request, channel 
 			return transformed
 		}
 	}
+	if service.IsWaveSpeedChannel(channel) {
+		if transformed, ok := transformWaveSpeedDepthPayload(payload); ok {
+			return transformed
+		}
+	}
 	if isKIEChannel(channel, modelName) && strings.Contains(request.URL.Path, "/jobs/createTask") {
 		if transformed, ok := transformKIECreateVideoResponse(payload, modelName); ok {
 			return transformed
@@ -465,6 +498,13 @@ func transformVideoCreatePayload(payload []byte, request *http.Request, channel 
 func transformVideoStatusPayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {
 	if service.IsGeminiChannel(channel) {
 		if transformed, ok := transformGeminiVideoTaskResponse(payload); ok {
+			return transformed
+		}
+	}
+	// WaveSpeed 的产地在 data.outputs[] 里，不在任何 video_url 字段上，
+	// 不先摊平会被 parseVideoTaskPayload 解析成「完成但没有地址」。
+	if service.IsWaveSpeedChannel(channel) {
+		if transformed, ok := transformWaveSpeedDepthPayload(payload); ok {
 			return transformed
 		}
 	}

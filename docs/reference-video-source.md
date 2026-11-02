@@ -178,23 +178,30 @@ uuid 不可猜，但链接会出现在上游请求体、AI 调用日志、浏览
 | 阿里云 OSS | 新用户试用（以官网为准） | `https://<bucket>.oss-<region>.aliyuncs.com/xxx.mp4` | 404（域名正常） | 高 | 推荐 |
 | 七牛云 Kodo | 约 10GB 存储，测试域名 30 天 | `http://<测试域名>/xxx.mp4` | 200 | 中（需备案域名才长期可用） | 可用 |
 | 又拍云 | 联盟计划 | 自绑定域名 | — | 中 | 可用 |
-| catbox.moe | 单文件 200MB，永久 | `https://files.catbox.moe/xxx.mp4` | 200 | **低**（公开、可被索引） | 仅临时验证 |
-| litterbox.catbox.moe | 单文件 1GB，1h/12h/24h/72h | 同上（临时） | 405（HEAD 不支持，服务正常） | 低 | 仅临时验证 |
-| 0x0.st | 单文件 512MB，保留 30–365 天 | `https://0x0.st/xxxx.mp4` | 200 | 低 | 仅临时验证 |
-| tmpfiles.org | 100MB，约 1 小时 | `https://tmpfiles.org/dl/xxxx/xxx.mp4` | 200 | 低 | 仅临时验证 |
-| uguu.se | 128MB，约 3 小时 | `https://uguu.se/xxxx.mp4` | 200 | 低 | 仅临时验证 |
+| **x0.at** | 512MB，保留 30~365 天 | `https://x0.at/xxxx.mp4` | ✅ 200 / 0.6MB/s | 低 | **默认首选** |
+| **uguu.se** | 128MB，约 3 小时 | `https://n.uguu.se/xxxx.mp4` | ✅ 200 / 0.5MB/s | 低 | **默认次选** |
+| catbox.moe | 单文件 200MB，永久 | `https://files.catbox.moe/xxx.mp4` | ❌ 全站暂停上传 | **低**（公开、可被索引） | **已失效** |
+| litterbox.catbox.moe | 单文件 1GB，1h/12h/24h/72h | 同上（临时） | ❌ `Invalid uploader` | 低 | **已失效** |
+| 0x0.st | 单文件 512MB，保留 30–365 天 | `https://0x0.st/xxxx.mp4` | ❌ 已关闭（公告无 ETA） | 低 | **已失效** |
+| tmpfiles.org | 100MB，约 1 小时 | 直链改为 `/dl/<ts>.<hash>/<id>/<name>` | ⚠️ 能传，但旧解析会 302 回 HTML | 低 | 不可用 |
+| pomf.lain.la | 约 100MB | `https://pomf2.lain.la/f/xxx.mp4` | ❌ 国内直连 15s 超时 | 低 | 不可用 |
+| temp.sh / qu.ax | — | 返回 `text/html` 预览页 | ⚠️ 传得上去但不是直链 | 低 | 不可用 |
+| envs.sh | — | 只接受网页表单 | ❌ curl 返回 HTML | 低 | 不可用 |
 | jsDelivr + GitHub | 单文件 ≤20MB | `https://cdn.jsdelivr.net/gh/<user>/<repo>@main/x.mp4` | 301（正常） | 低（仓库公开） | 不建议 |
 | 百度/夸克/阿里云盘 | — | 需 Cookie / 防盗链 | — | — | **不可用** |
 | B站 / YouTube | — | 非 mp4 直链 | — | — | **不可用** |
 
+> 表中「本机可达」一列已于 **2026-11-02** 用真实 mp4（1.5MB / 3s / 720p）逐个复测：
+> 不再只看域名能否解析，而是校验 `Content-Type: video/mp4` 与实际字节数。
+
 ### 命令行上传示例（临时验证用）
 
 ```bash
-# 0x0.st：一条命令，返回直链
-curl -F "file=@ref.mp4" https://0x0.st
+# x0.at（默认首选，512MB / 30~365 天）—— 0x0.st 的姊妹站，协议一致
+curl -F "file=@ref.mp4" https://x0.at
 
-# catbox（永久，公开）
-curl -F "reqtype=fileupload" -F "fileToUpload=@ref.mp4" https://catbox.moe/user/api.php
+# uguu.se（默认次选，128MB / 约 3 小时）—— 注意字段名是 files[]，带方括号
+curl -F "files[]=@ref.mp4" "https://uguu.se/upload?output=text"
 
 # 腾讯云 COS（需 coscmd / coscli）
 coscmd upload ref.mp4 /ref/ref.mp4
@@ -225,7 +232,7 @@ curl -I "https://.../ref.mp4"
    ├─ 成功 → 用 {PUBLIC_BASE_URL}/api/media/references/xxx
    └─ 失败 → POST /api/v1/media/public-mirror（multipart）
               → 后端按 PUBLIC_MIRROR_PROVIDERS 顺序尝试
-              → catbox → 0x0.st → litterbox → tmpfiles
+              → x0.at → uguu.se
               → 任一成功即返回直链；全失败返回每个托管的原因
 ```
 
@@ -237,7 +244,7 @@ curl -I "https://.../ref.mp4"
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `PUBLIC_MIRROR_MODE` | `fallback` | `fallback` 仅兜底；`off` 整体关闭 |
-| `PUBLIC_MIRROR_PROVIDERS` | `catbox,0x0st,litterbox,tmpfiles` | 顺序即优先级，未知名字忽略 |
+| `PUBLIC_MIRROR_PROVIDERS` | `x0at,uguu` | 顺序即优先级，未知名字忽略。2026-11 实测仅 `x0at` / `uguu` 可用 |
 | `PUBLIC_MIRROR_RESULTS` | `false` | 是否允许镜像生成结果 |
 
 ### 交互

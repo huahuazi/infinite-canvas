@@ -10,7 +10,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "ark" | "anmiao" | "flatkey" | "a6api";
+    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "ark" | "anmiao" | "flatkey" | "a6api" | "wavespeed" | "huggingface";
     name: string;
     baseUrl: string;
     apiKey: string;

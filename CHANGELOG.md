@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.11.0 - 2026-11-02
+
++ [新增] 画布「生成深度视频」支持真实深度估计：新增 `wavespeed` 与 `huggingface` 两个渠道协议，走 Video Depth Anything 逐帧估计空间深度，不再是让视频模型「照着提示词画深度图」。WaveSpeed 走标准 REST（`POST /api/v3/{model}` + `GET /api/v3/predictions/{id}/result`，$0.005/秒）；Hugging Face 走 Gradio 协议（`/gradio_api/upload` → `/gradio_api/call/infer_video_depth` → SSE 监听 event_id），产物自动转存到本地参考素材目录，Space 重启不丢
++ [新增] 后台渠道表单新增「WaveSpeedAI（深度视频）」「HuggingFace（深度视频）」两项协议，带接口地址、模型名、限额与合规提示；浏览器本地渠道下拉同步
++ [优化] 深度渠道下「生成深度视频」不再套用火山的 `ratio=adaptive` / `duration=-1`，也不受「素材 4~30 秒」「必须 Seedance 2.x」限制；模型没切到深度模型时提前拦截并说明
++ [修复] 公共直链托管原来默认的四家已全部停止服务或直链失效（catbox 全站暂停上传、litterbox 返回 Invalid uploader、0x0.st 已关闭、tmpfiles 直链改为带签名段），默认改为 2026-11-02 实测可用的 `x0at`（512MB / 30~365 天）与 `uguu`（128MB / 约 3 小时）；旧实现保留，改配置即可用回
++ [优化] 公共托管上传超时从 90 秒提到 300 秒：境外托管国内直连实测只有 0.5~0.7MB/s，50MB 参考视频 90 秒传不完
++ [修复] WaveSpeed 的 Base URL 天然带 `/api/v3`，会被「地址含 /api/v3 即火山方舟」的兜底判定抢走，视频任务被改写到 `/contents/generations/tasks` 后 404；`isArkSeedanceVideo` 与 `isArkOpenAPIChannel` 均已排除两家深度渠道
+
 ## v0.10.12 - 2026-11-02
 
 + [修复] A6API 渠道的参考素材「挂得上、发不出去」：参考图 UI 允许 30 张，请求体只发 9 张；参考视频 UI 允许 10 个，请求体只发 1 个；参考音频 UI 允许 10 个，请求体完全不发（该平台文档里的 `audio` / `sound` / `with_audio` 是「是否生成音频」的布尔开关，不是音频输入）。现在三者的 UI 上限与实际发送量一致，选中音频文件时明确提示「当前渠道不支持参考音频」

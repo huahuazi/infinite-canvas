@@ -607,6 +607,24 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 		}
 		return path
 	}
+	// WaveSpeed 把模型 ID 直接当路径主体（POST /api/v3/{model}），
+	// 查询走 /api/v3/predictions/{id}/result，和 /videos 的语义没有任何对应关系。
+	if service.IsWaveSpeedChannel(channel) {
+		if path == "/videos" {
+			upstreamModel := strings.TrimPrefix(strings.TrimSpace(service.UpstreamModelName(channel, modelName)), "/")
+			if upstreamModel != "" {
+				return "/" + upstreamModel
+			}
+			return path
+		}
+		if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+			taskID := strings.TrimSpace(strings.TrimPrefix(path, "/videos/"))
+			if taskID != "" && !strings.Contains(taskID, "/") {
+				return "/predictions/" + url.PathEscape(taskID) + "/result"
+			}
+		}
+		return path
+	}
 	if isCogVideoX3Model(modelName) {
 		if path == "/videos" {
 			return "/videos/generations"
@@ -681,7 +699,10 @@ func isArkSeedanceVideo(channel model.ModelChannel, modelName string) bool {
 	// A6API 用标准 OpenAI 视频协议（/v1/videos、/v1/videos/{id}），
 	// 模型名即使带 seedance 也不能走 Ark 任务接口。
 	// Flatkey 有同构但路径不同的任务协议，同样不能被下面按模型名（seedance）的判定抢走。
-	if isFlatkeyChannel(channel) || service.IsA6APIChannel(channel) {
+	// WaveSpeed / Hugging Face 的深度视频是各自独立的协议，
+	// 尤其 WaveSpeed 的 Base URL 天然带 /api/v3，不排除会被当成火山方舟。
+	if isFlatkeyChannel(channel) || service.IsA6APIChannel(channel) ||
+		service.IsWaveSpeedChannel(channel) || service.IsHuggingFaceChannel(channel) {
 		return false
 	}
 	// 后台渠道显式选择「火山方舟（Ark）」或「灵智」协议时直接命中，不必再猜接口地址。

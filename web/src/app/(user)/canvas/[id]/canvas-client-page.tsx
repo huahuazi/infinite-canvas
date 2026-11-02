@@ -49,7 +49,7 @@ import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAnmiaoChannel, seedanceDurationMax, seedanceDurationOptionsFor } from "@/lib/seedance-video";
-import { VIDEO_DERIVE_PRESETS, applyVideoDeriveConfig, videoDeriveSupportIssue, type VideoDeriveKind } from "@/lib/video-derive";
+import { VIDEO_DERIVE_PRESETS, applyVideoDeriveConfig, isRealDepthVideoConfig, videoDeriveSupportIssue, type VideoDeriveKind } from "@/lib/video-derive";
 import { arkAssetReferences } from "../utils/canvas-ark-assets";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -2428,7 +2428,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             }
             const preset = VIDEO_DERIVE_PRESETS[kind];
             const baseConfig = buildGenerationConfig(effectiveConfig, node, "video");
-            const issue = videoDeriveSupportIssue(baseConfig, node.metadata.durationMs);
+            const issue = videoDeriveSupportIssue(baseConfig, node.metadata.durationMs, kind);
             if (issue) {
                 message.warning(issue);
                 return;
@@ -2437,6 +2437,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 openConfigDialog(true);
                 return;
             }
+            // 真实深度渠道（WaveSpeed / Hugging Face）跑的是深度估计模型，
+            // 不套火山的 ratio/duration，也不把原视频混进图片参考里。
+            const realDepth = kind === "depth" && isRealDepthVideoConfig(baseConfig);
             // 视频编辑任务的 ratio / duration 与常规生成不同，这里只覆盖本次请求。
             const config = applyVideoDeriveConfig(baseConfig, kind);
             const videoId = nanoid();
@@ -2457,8 +2460,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     status: NODE_STATUS_LOADING,
                     model: config.model,
                     channelId: config.videoChannelId || config.activeChannelId,
-                    size: "adaptive",
-                    seconds: "-1",
+                    size: realDepth ? undefined : "adaptive",
+                    seconds: realDepth ? undefined : "-1",
                     vquality: config.vquality,
                     mode: config.videoMode,
                     negativePrompt: config.videoNegativePrompt,
@@ -2467,7 +2470,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     generateAudio: "false",
                     characterOrientation: config.videoCharacterOrientation,
                     watermark: config.videoWatermark,
-                    references: [node.metadata.storageKey || node.metadata.content],
+                    references: realDepth ? [] : [node.metadata.storageKey || node.metadata.content],
                     deriveKind: kind,
                     startedAt,
                     progress: 0,

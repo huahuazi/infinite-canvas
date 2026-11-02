@@ -81,6 +81,11 @@ func AdminTestChannelModel(index *int, channel model.ModelChannel, modelName str
 	if IsMiniMaxChannel(resolved) {
 		return "MiniMax-H3 是异步视频模型，请在视频创作台测试生成。", nil
 	}
+	// 深度视频两家都不是 OpenAI 兼容形态（WaveSpeed 是 model-as-path 的任务接口，
+	// Hugging Face 是 Gradio 的上传 + SSE），用 /chat/completions 探活必然失败。
+	if IsDepthVideoChannel(resolved) {
+		return "深度视频模型是异步任务，请在画布右键「生成深度视频」处实测一次。", nil
+	}
 	// A6API 是标准 OpenAI 兼容网关：即使模型名带 seedance，也不能走 Ark 的
 	// /contents/generations/tasks 测试，否则必然 404。
 	if !IsA6APIChannel(resolved) && (isArkChannel(resolved) || isSeedanceModelName(modelName)) {
@@ -367,6 +372,19 @@ func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 	if IsMiniMaxChannel(channel) {
 		return baseURL + path
 	}
+	// Hugging Face Space 的 Gradio 接口挂在站点根（/gradio_api/...），
+	// 不能像 OpenAI 那样补 /v1，补了就 404。
+	if IsHuggingFaceChannel(channel) {
+		return baseURL + path
+	}
+	// WaveSpeed 的 REST 版本段是 /api/v3，且 model 直接写在路径里。
+	// 用户通常只填 https://api.wavespeed.ai，这里补齐版本段，避免被下面的 /v1 规则带偏。
+	if IsWaveSpeedChannel(channel) {
+		if !strings.Contains(strings.ToLower(baseURL), "/api/v3") {
+			baseURL = strings.TrimRight(baseURL, "/") + "/api/v3"
+		}
+		return baseURL + path
+	}
 	lowerBaseURL := strings.ToLower(baseURL)
 	if !hasVersionPathSegment(lowerBaseURL) && !strings.HasSuffix(lowerBaseURL, "/v1") {
 		baseURL += "/v1"
@@ -479,6 +497,12 @@ func isArkOpenAPIChannel(channel model.ModelChannel) bool {
 	if isArkProtocol(channel) {
 		return true
 	}
+	// WaveSpeed 的 REST 版本段就是 /api/v3，Hugging Face 的 Space 域名也与方舟无关。
+	// 不在这里排除，下面「地址带 /api/v3 即方舟」的兜底会把它们判成方舟，
+	// 视频任务随即被改写到 /contents/generations/tasks 并 404。
+	if IsWaveSpeedChannel(channel) || IsHuggingFaceChannel(channel) {
+		return false
+	}
 	baseURL := strings.ToLower(normalizeModelChannelBaseURL(channel.BaseURL))
 	return strings.HasSuffix(baseURL, "/api/v3") || hasArkOpenAPIVersionPath(baseURL)
 }
@@ -539,6 +563,86 @@ func IsA6APIChannel(channel model.ModelChannel) bool {
 		return false
 	}
 	return IsA6APIBaseURL(channel.BaseURL)
+}
+
+// IsWaveSpeedProtocol 是否显式选择了 WaveSpeedAI 协议。
+func IsWaveSpeedProtocol(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), "wavespeed")
+}
+
+// IsWaveSpeedBaseURL 判断 Base URL 是否指向 WaveSpeedAI（api.wavespeed.ai）。
+// 只在渠道没声明 protocol 时作为兜底，避免把显式选了别的协议的地址反向覆盖。
+func IsWaveSpeedBaseURL(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "api.wavespeed.ai" || strings.HasSuffix(host, ".wavespeed.ai")
+}
+
+// IsWaveSpeedChannel 判断渠道是否为 WaveSpeedAI。
+// 判定顺序与灵智一致：显式 protocol 优先，Base URL 只在没声明协议时兜底。
+func IsWaveSpeedChannel(channel model.ModelChannel) bool {
+	if IsWaveSpeedProtocol(channel) {
+		return true
+	}
+	if strings.TrimSpace(channel.Protocol) != "" {
+		return false
+	}
+	return IsWaveSpeedBaseURL(channel.BaseURL)
+}
+
+// IsHuggingFaceProtocol 是否显式选择了 Hugging Face Gradio Space 协议。
+func IsHuggingFaceProtocol(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), "huggingface")
+}
+
+// IsHuggingFaceBaseURL 判断 Base URL 是否指向 Hugging Face Space。
+// 官方 Space 的域名形如 https://<owner>-<space>.hf.space；
+// 同时兼容用户直接粘 huggingface.co 页面地址的情况（由归一化裁掉 /spaces/... 子路径）。
+func IsHuggingFaceBaseURL(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "hf.space" || strings.HasSuffix(host, ".hf.space") ||
+		host == "huggingface.co" || strings.HasSuffix(host, ".huggingface.co")
+}
+
+// IsHuggingFaceChannel 判断渠道是否为 Hugging Face Space。
+func IsHuggingFaceChannel(channel model.ModelChannel) bool {
+	if IsHuggingFaceProtocol(channel) {
+		return true
+	}
+	if strings.TrimSpace(channel.Protocol) != "" {
+		return false
+	}
+	return IsHuggingFaceBaseURL(channel.BaseURL)
+}
+
+// IsDepthVideoModelName 判断模型名是否属于「深度视频」这一类。
+// 两种渠道的默认模型：
+//   WaveSpeed    wavespeed-ai/depth-anything/video（以及 V3 变体 .../depth-anything-v3/video）
+//   HuggingFace  video-depth-anything / depth-anything-video
+//
+// 深度视频不是「生成」而是「从已有视频估计几何」，参数与普通视频模型完全不同，
+// 因此判定要独立于 isVideoModelName，不能只靠模型名里有没有 video 字样。
+func IsDepthVideoModelName(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	if name == "" {
+		return false
+	}
+	if strings.Contains(name, "depth-anything") || strings.Contains(name, "depth_anything") {
+		return true
+	}
+	return strings.Contains(name, "video-depth") || strings.Contains(name, "depth-video")
+}
+
+// IsDepthVideoChannel 判断渠道是否支持真实深度视频估计（而不是用视频编辑任务「画」深度图）。
+func IsDepthVideoChannel(channel model.ModelChannel) bool {
+	return IsWaveSpeedChannel(channel) || IsHuggingFaceChannel(channel)
 }
 
 // UpstreamModelName 返回实际发给上游的 model 名。

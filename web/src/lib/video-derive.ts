@@ -1,6 +1,7 @@
 import type { AiConfig } from "@/stores/use-config-store";
 import { activeChannelForConfig, channelProtocolForConfig } from "@/stores/use-config-store";
 import { isAnmiaoChannel, isFlatkeyBaseUrl } from "@/lib/seedance-video";
+import { isDepthVideoModelName, isHuggingFaceBaseUrl, isWaveSpeedBaseUrl } from "@/lib/model-channel";
 import { modelKey } from "@/lib/video-model-capabilities";
 
 /** 视频派生类型：白模（clay render）/ 深度图（depth map）。 */
@@ -43,6 +44,24 @@ export const VIDEO_DERIVE_PRESETS: Record<VideoDeriveKind, VideoDerivePreset> = 
 };
 
 /**
+ * 当前渠道是否跑「真实深度估计」（WaveSpeedAI / Hugging Face Space）。
+ *
+ * 这类渠道调用专用的 Video Depth Anything 模型，从原视频里估计空间深度，
+ * 参数与火山的「视频编辑」任务完全不同：
+ *   - 不需要 omni_reference_task_type，也不接受 ratio / duration
+ *   - 不受「素材 4~30 秒」「必须 Seedance 2.x」的限制
+ * 判定顺序与后端一致：显式 protocol 优先，Base URL 只在没声明协议时兜底。
+ */
+export function isRealDepthVideoConfig(config: AiConfig): boolean {
+    const protocol = channelProtocolForConfig(config);
+    if (protocol === "wavespeed" || protocol === "huggingface") return true;
+    if (protocol) return false;
+    const channel = activeChannelForConfig(config);
+    const baseUrl = channel?.baseUrl || config.baseUrl || "";
+    return isWaveSpeedBaseUrl(baseUrl) || isHuggingFaceBaseUrl(baseUrl);
+}
+
+/**
  * 视频编辑任务的硬约束（火山官方）：
  *   - ratio 必须 adaptive
  *   - duration 必须 -1
@@ -52,6 +71,8 @@ export const VIDEO_DERIVE_PRESETS: Record<VideoDeriveKind, VideoDerivePreset> = 
  */
 export function applyVideoDeriveConfig(config: AiConfig, kind?: VideoDeriveKind | null | string): AiConfig {
     if (!kind) return config;
+    // 真实深度渠道不吃火山那套 edit 参数：强塞 duration=-1 / ratio=adaptive 会被上游拒。
+    if (kind === "depth" && isRealDepthVideoConfig(config)) return config;
     return {
         ...config,
         videoArkTaskType: "edit",
@@ -62,7 +83,17 @@ export function applyVideoDeriveConfig(config: AiConfig, kind?: VideoDeriveKind 
 }
 
 /** 派生前的本地预检：命中就返回给用户看的提示，null 表示可以提交。 */
-export function videoDeriveSupportIssue(config: AiConfig, durationMs?: number): string | null {
+export function videoDeriveSupportIssue(config: AiConfig, durationMs?: number, kind?: VideoDeriveKind | null | string): string | null {
+    // 真实深度渠道只要求「有视频素材」，时长与视频模型都不受火山约束。
+    if (kind === "depth" && isRealDepthVideoConfig(config)) {
+        // 渠道对了但模型还停在普通视频模型上时，上游地址会拼错（WaveSpeed 的模型名就是路径主体），
+        // 这里提前拦住，比让用户看到 404 再猜要快得多。
+        const current = config.model || config.videoModel || "";
+        if (!isDepthVideoModelName(current)) {
+            return `当前渠道是深度视频渠道，请先把视频模型切换为深度模型（如 wavespeed-ai/depth-anything/video 或 video-depth-anything），当前选中的是 ${current || "空"}`;
+        }
+        return null;
+    }
     const model = config.model || config.videoModel || "";
     if (!modelKey(model).includes("seedance-2")) {
         return "白模 / 深度视频依赖火山「视频编辑」任务，仅 Seedance 2.5 / 2.0 系列支持：请先把视频模型切换为 Seedance 2.5";
