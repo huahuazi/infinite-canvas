@@ -1,4 +1,4 @@
-export type ModelChannelProtocol = "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "ark" | "anmiao" | "flatkey";
+export type ModelChannelProtocol = "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "ark" | "anmiao" | "flatkey" | "a6api";
 
 export const modelChannelDefaultBaseUrls: Record<ModelChannelProtocol, string> = {
     openai: "https://api.openai.com",
@@ -11,6 +11,7 @@ export const modelChannelDefaultBaseUrls: Record<ModelChannelProtocol, string> =
     ark: "https://ark.cn-beijing.volces.com/api/v3",
     anmiao: "https://api.lk888.ai/api/v3/anmiao",
     flatkey: "https://router.flatkey.ai/v1",
+    a6api: "https://api.a6api.vip",
 };
 
 export const modelChannelApiKeyUrls: Partial<Record<ModelChannelProtocol, string>> = {
@@ -42,3 +43,28 @@ export const flatkeyChannelTips = {
     baseUrl: "填 https://router.flatkey.ai/v1（只填到 /v1，不要带 /generation/tasks）",
     models: "视频模型手输即可，例如 seedance-2.5；模型列表可点「拉取全部渠道」读取 /v1/models。",
 };
+
+// A6API（a6api.vip）聚合网关提示。
+// 它是标准 OpenAI 兼容形态：文本 /v1/chat/completions、图片 /v1/images/generations、
+// 视频 /v1/videos + /v1/videos/{id} 轮询，路径与默认 openai 协议一致，不需要改写。
+// 需要单独建协议只是为了不被「模型名含 seedance 就走火山」的兜底逻辑抢走。
+export const a6apiChannelTips = {
+    baseUrl: "填 https://api.a6api.vip 即可（不要带 /v1/chat/completions 这类完整路径）。站点域名 a6api.vip 是前端页面，网关是 api.a6api.vip。",
+    models: "模型名以「模型市场」或 GET /v1/models 返回的 id 为准，支持别名映射。注意：该平台文档里举例的 sora-2、dall-e 系列、imagen 系列当前并未挂牌，照抄文档示例会直接失败。",
+    modelAliases: "一般不用填：A6API 对外的模型 id 就是上游真名。只有用自定义展示名时才映射，例如 my-image-pro = gpt-image-2.5，每行一条「前端模型名 = 上游模型名」。",
+    limits: "图片为同步请求，size 必须用半角 x（1024x1024），全角 × 会报错；视频为异步任务，提交后用 /v1/videos/{id} 轮询，完成后经 /v1/videos/{id}/content 取片。视频时长按模型上限收敛（如 veo-3.1 固定 8 秒、kling-2.6 最多 10 秒）。",
+};
+
+// A6API 的模型能力不一定能从名字看出来（kling-3.0、veo-3.1、viduq3、sora-2 都不带 video 字样），
+// 在后台渠道抽屉的「模型类型」里显式声明最稳。
+export const a6apiModelCapabilityHint = "A6API 的 kling / veo / viduq3 / sora / happyhorse 系列按名字猜不出视频类型，请在「模型类型」里手动选成「视频」。";
+
+// 判断 Base URL 是否指向 A6API 网关。前端在没拿到 protocol（旧配置）时用它兜底。
+export function isA6APIBaseUrl(baseUrl: string) {
+    try {
+        const host = new URL(String(baseUrl || "").trim()).hostname.toLowerCase();
+        return host === "a6api.vip" || host.endsWith(".a6api.vip");
+    } catch {
+        return false;
+    }
+}

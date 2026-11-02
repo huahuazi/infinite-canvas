@@ -77,8 +77,9 @@ export function videoDeriveSupportIssue(config: AiConfig, durationMs?: number): 
         return "Flatkey 通道不承接视频编辑任务（必须传 duration=-1）：白模 / 深度视频请改用火山方舟官方渠道";
     }
     // 这些协议各有自己的请求体与接口路径，塞不进火山的 content[] + omni_reference_task_type。
+    // A6API 是标准 OpenAI 视频 JSON，同样没有 omni_reference_task_type，白模/深度视频必须切回 Ark。
     const protocol = channelProtocolForConfig(config);
-    if (["kie", "apimart", "grok2api", "mimo", "gemini"].includes(protocol)) {
+    if (["kie", "apimart", "grok2api", "mimo", "gemini", "a6api"].includes(protocol)) {
         return `当前渠道走 ${protocol} 协议，不支持火山视频编辑任务：白模 / 深度视频请切换到火山方舟（Ark）渠道`;
     }
     if (typeof durationMs === "number" && durationMs > 0) {

@@ -5,6 +5,7 @@ import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio,
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
 import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isAnmiaoChannel, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
+import { isA6APIBaseUrl } from "@/lib/model-channel";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
@@ -51,6 +52,9 @@ function aiApiUrl(config: AiConfig, path: string) {
 function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
     const protocol = channelProtocolForConfig(config);
     if (protocol === "kie" || protocol === "apimart" || protocol === "grok2api") return false;
+    // A6API 是标准 OpenAI 视频协议（/v1/videos），即使挂的是 seedance 模型，
+    // 也不能被下面的模型名判定带进 /contents/generations/tasks。
+    if (protocol === "a6api") return false;
     // 后台渠道显式选择「火山方舟（Ark）」或「灵智」协议时直接判定，不必再猜接口地址。
     // 灵智是 Ark 的一种方言，任务路径同样是 /contents/generations/tasks。
     if (protocol === "ark" || protocol === "anmiao") return true;
@@ -94,8 +98,19 @@ function flatkeyVideoApiUrl(config: AiConfig, taskId: string) {
     return `${baseUrl}${FLATKEY_VIDEO_PATH}${taskId ? `/${encodeURIComponent(taskId)}` : ""}`;
 }
 
-function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
-    if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
+// A6API（api.a6api.vip）走标准 OpenAI 视频协议：POST /v1/videos、GET /v1/videos/{id}、
+// 完成后 GET /v1/videos/{id}/content 取片。与 Flatkey 的区别是请求体是 JSON（不是 Ark 的 content[]），
+// 所以必须单独构造和解析，不能复用 Ark 分支。
+function isA6APIVideoRequest(config: AiConfig) {
+    const protocol = channelProtocolForConfig(config);
+    if (protocol === "a6api") return true;
+    // 显式选了别的协议时不要被地址反向覆盖。
+    if (protocol) return false;
+    const channel = activeChannelForConfig(config);
+    return isA6APIBaseUrl(channel?.baseUrl || config.baseUrl || "");
+}
+
+function aiVideoPollUrl(config: AiConfig, model: string, id: string) {    if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
         const channel = activeChannelForConfig(config);
         return geminiOperationUrl(channel?.baseUrl || config.baseUrl, id);
     }
@@ -212,7 +227,7 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
     try {
         if (initialDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
         for (; ;) {
-            const video = await cacheProtectedArkVideo(config, model, await cacheProtectedGeminiVideo(config, model, await pollOnce()));
+            const video = await cacheProtectedArkVideo(config, model, await cacheProtectedGeminiVideo(config, model, await cacheA6APIVideo(config, model, await pollOnce())));
             onPoll?.(video);
             if (isFailedVideoStatus(video.status)) throw new VideoRequestError(video.error?.message || "视频生成失败", video);
             if (typeof video.progress === "number") onProgress?.(video.progress, video);
@@ -243,7 +258,7 @@ export async function pollVideoGenerationTaskStatus(config: AiConfig, task: Vide
     const result = directProvider
         ? await (await import("@/services/api/direct-ai")).pollDirectVideoTask(config, directProvider, pollId)
         : unwrapVideoResponseForConfig(config, model, (await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
-    return cacheProtectedArkVideo(config, model, await cacheProtectedGeminiVideo(config, model, await cacheProtectedGrokVideo(config, model, result)));
+    return cacheProtectedArkVideo(config, model, await cacheProtectedGeminiVideo(config, model, await cacheProtectedGrokVideo(config, model, await cacheA6APIVideo(config, model, result))));
 }
 
 export async function listVideoGenerationTasks(config: AiConfig) {
@@ -274,6 +289,34 @@ async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: Vi
     if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
     const media = await uploadMediaFile(await response.blob(), "generated-video");
     return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
+}
+
+// A6API 的 completed 响应可能只给状态、不给地址，成品必须单独 GET /v1/videos/{id}/content。
+// 拿到的二进制直接进项目存储——该平台明确说不保证结果 URL 的生命周期，不能把外链交给画布。
+async function cacheA6APIVideo(config: AiConfig, model: string, task: VideoResponse) {
+    if (!isCompletedVideoStatus(task.status) || task.storageKey) return task;
+    if (!isA6APIVideoRequest(config)) return task;
+    const taskId = task.task_id || task.id || task.video_id || "";
+    if (!taskId) return task;
+    try {
+        // 带上 model：云端代理要靠它定位渠道，本地直连时上游会忽略这个 query。
+        const response = await fetch(`${aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`)}?model=${encodeURIComponent(model)}`, { headers: aiHeaders(config) });
+        if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
+        const media = await uploadMediaFile(await response.blob(), "generated-video");
+        return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
+    } catch (error) {
+        // 下载失败但响应里带了可直连地址时，退回镜像，至少让用户拿得到一个能播的链接。
+        const fallback = task.video_url || task.url || "";
+        if (/^https?:\/\//i.test(fallback)) {
+            try {
+                const mirrored = await mirrorPublicMediaUrl(fallback, `a6api-video-${taskId}.mp4`);
+                return { ...task, url: mirrored, video_url: mirrored };
+            } catch {
+                console.warn("A6API 视频转存失败：", error);
+            }
+        }
+        return task;
+    }
 }
 
 // 火山方舟的产物 URL 仅 24 小时有效（Seedance 2.5 还限制最多下载 100 次），
@@ -345,6 +388,7 @@ async function createAgnesVideoV25RequestBody(config: AiConfig, model: string, p
 
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
     const size = normalizeVideoSize(config.size);
+    if (isA6APIVideoRequest(config)) return createA6APIVideoRequestBody(config, model, prompt, input);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return createGeminiVeoRequestBody(config, model, prompt, input);
     if (isGrok2APIVideoConfig(config, model)) return createGrok2APIVideoRequestBody(config, model, prompt, input);
     if (isMiniMaxH3Config(config, model)) return createMiniMaxH3VideoRequestBody(config, model, prompt, input);
@@ -424,6 +468,59 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     videoFiles.forEach((file) => body.append("video_reference[]", file));
     const audioFiles = kling ? [] : await Promise.all(input.audioReferences.map(mediaReferenceToFormValue));
     audioFiles.forEach((file) => body.append("audio_reference[]", file));
+    return body;
+}
+
+// A6API 各视频模型的时长上限并不一致（veo-3.1 固定 8 秒、kling-2.6 最多 10 秒、
+// sora-2 最多 12 秒…），超限时上游直接回 video_duration_invalid，
+// 前端在这里先按接入文档的模型表收敛，别把明显不合法的值发出去。
+function a6apiVideoDurationRule(model: string): { max: number; fixed?: number; auto: boolean } {
+    const key = modelKey(model);
+    if (key.includes("veo-3-1")) return { max: 8, fixed: 8, auto: false };
+    if (key.includes("kling-2-6")) return { max: 10, auto: false };
+    if (key.includes("kling-3") || key.includes("kling-4")) return { max: 15, auto: false };
+    if (key.includes("viduq3")) return { max: 16, auto: false };
+    if (key.includes("sora-2")) return { max: 12, auto: false };
+    if (key.includes("grok-imagine-video")) return { max: 15, auto: false };
+    if (key.includes("minimax-h3") || key.includes("happyhorse")) return { max: 15, auto: false };
+    if (key.includes("seedance-2-5")) return { max: 30, auto: true };
+    if (key.includes("seedance")) return { max: 15, auto: true };
+    if (key.includes("wan3")) return { max: 30, auto: true };
+    // 表外模型：接入文档标注默认 4 秒、保护上限 60 秒。
+    return { max: 60, auto: true };
+}
+
+function normalizeA6APIVideoSeconds(model: string, value: string): number {
+    const rule = a6apiVideoDurationRule(model);
+    if (rule.fixed) return rule.fixed;
+    const raw = String(value ?? "").trim().toLowerCase();
+    if (raw === "-1" || raw === "auto") return rule.auto ? -1 : 5;
+    const seconds = Math.floor(Number(raw) || 5);
+    return Math.max(1, Math.min(rule.max, seconds));
+}
+
+// A6API 视频请求体：标准 OpenAI 视频 JSON（不是 Ark 的 content[]）。
+// 只发有值的字段——该平台对规格是强校验，给不支持音频的模型多塞一个
+// generate_audio 就会被判 video_spec_unrecognized。
+async function createA6APIVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>): Promise<Record<string, unknown>> {
+    const channel = activeChannelForConfig(config);
+    const body: Record<string, unknown> = {
+        model: upstreamModelNameForChannel(channel, model),
+        prompt,
+        seconds: normalizeA6APIVideoSeconds(model, config.videoSeconds),
+    };
+    const size = normalizeVideoSize(config.size);
+    if (size) body.size = size;
+    if (boolConfig(config.videoGenerateAudio, false)) body.generate_audio = true;
+
+    // 首帧/尾帧用独立字段，和普通参考图不要混发，否则上游会判规格冲突。
+    if (input.firstFrame) body.first_frame_image = await arkReferenceImageUrl(input.firstFrame);
+    else if (input.references.length) body.image = await arkReferenceImageUrl(input.references[0]);
+    if (input.lastFrame) body.last_frame_image = await arkReferenceImageUrl(input.lastFrame);
+    if (input.videoReferences.length) body.video = await arkReferenceVideoUrl(input.videoReferences[0]);
+    if (input.audioReferences.length) body.audio = await arkReferenceAudioUrl(input.audioReferences[0]);
+    const negative = config.videoNegativePrompt?.trim();
+    if (negative) body.metadata = { negative_prompt: negative };
     return body;
 }
 
@@ -790,6 +887,27 @@ function normalizeFlatkeyVideoResponse(payload: ApiVideoResponse): VideoResponse
     });
 }
 
+// A6API 的视频任务对象是标准 OpenAI 形态：{ id, task_id, status: queued|in_progress|completed|failed }。
+// 它和 Ark 最大的不同是 completed 时可能只给状态、不给地址，成品要另走 /videos/{id}/content，
+// 所以这里不强制要求 video_url，交给 cacheA6APIVideo 兜底下载。
+function normalizeA6APIVideoResponse(payload: ApiVideoResponse): VideoResponse {
+    const outer = payload as unknown as Record<string, unknown>;
+    const root = outer.data && typeof outer.data === "object" && !Array.isArray(outer.data)
+        ? (outer.data as Record<string, unknown>)
+        : outer;
+    const output = root.output && typeof root.output === "object" ? (root.output as Record<string, unknown>) : {};
+    const errorMessage = firstString(nestedMessage(root.error), output.error ? nestedMessage(output.error) : "", root.message);
+    const status = firstString(root.status, root.state, output.status, errorMessage ? "failed" : "");
+    const videoUrl = firstString(root.video_url, root.videoUrl, root.url, output.video_url, output.url);
+    return normalizeVideoResponse({
+        ...root,
+        task_id: firstString(root.task_id, root.id),
+        status: status || (videoUrl ? "completed" : "queued"),
+        ...(videoUrl ? { video_url: videoUrl, url: videoUrl } : {}),
+        ...(errorMessage ? { error: { message: errorMessage } } : {}),
+    });
+}
+
 function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {
     if (!payload) throw new Error("接口没有返回视频任务");
     if (isVideoEnvelope(payload)) {
@@ -809,6 +927,7 @@ function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: 
     if (isVideoEnvelope(payload) && payload.code !== 0) {
         throw new VideoRequestError(payload.msg || payload.message || "视频生成失败", payload);
     }
+    if (isA6APIVideoRequest(config)) return normalizeA6APIVideoResponse(payload);
     if (isFlatkeyVideoRequest(config)) return normalizeFlatkeyVideoResponse(payload);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return normalizeGeminiVideoResponse(payload);
     if (isArkSeedanceVideoRequest(config, model)) return normalizeArkVideoResponse(payload);

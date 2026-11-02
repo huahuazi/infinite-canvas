@@ -350,6 +350,7 @@ export function AppConfigModal() {
                                                     { label: "火山方舟（Ark）", value: "ark" },
                                                     { label: "灵智", value: "anmiao" },
                                                     { label: "Flatkey", value: "flatkey" },
+                                                    { label: "A6API", value: "a6api" },
                                                 ]}
                                                 onChange={(protocol: LocalModelChannel["protocol"]) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
                                             />

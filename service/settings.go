@@ -81,7 +81,9 @@ func AdminTestChannelModel(index *int, channel model.ModelChannel, modelName str
 	if IsMiniMaxChannel(resolved) {
 		return "MiniMax-H3 是异步视频模型，请在视频创作台测试生成。", nil
 	}
-	if isArkChannel(resolved) || isSeedanceModelName(modelName) {
+	// A6API 是标准 OpenAI 兼容网关：即使模型名带 seedance，也不能走 Ark 的
+	// /contents/generations/tasks 测试，否则必然 404。
+	if !IsA6APIChannel(resolved) && (isArkChannel(resolved) || isSeedanceModelName(modelName)) {
 		return testArkSeedanceChannelModel(resolved, modelName)
 	}
 	return testAdminChannelModel(resolved, modelName)
@@ -509,6 +511,36 @@ func IsAnmiaoChannel(channel model.ModelChannel) bool {
 	return IsAnmiaoBaseURL(channel.BaseURL)
 }
 
+// IsA6APIProtocol 是否显式选择了 A6API 聚合网关协议。
+func IsA6APIProtocol(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), "a6api")
+}
+
+// IsA6APIBaseURL 判断 Base URL 是否指向 A6API 网关（api.a6api.vip）。
+// A6API 的接口是标准 OpenAI 兼容形态，不需要改写路径，
+// 但必须能识别出来，否则模型名里带 seedance 时会被 Ark 分支抢走，
+// 请求打到 /contents/generations/tasks 直接 404。
+func IsA6APIBaseURL(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "a6api.vip" || strings.HasSuffix(host, ".a6api.vip")
+}
+
+// IsA6APIChannel 判断渠道是否为 A6API 聚合网关。
+// 判定顺序与灵智一致：显式 protocol 优先，Base URL 只在没声明协议时兜底。
+func IsA6APIChannel(channel model.ModelChannel) bool {
+	if IsA6APIProtocol(channel) {
+		return true
+	}
+	if strings.TrimSpace(channel.Protocol) != "" {
+		return false
+	}
+	return IsA6APIBaseURL(channel.BaseURL)
+}
+
 // UpstreamModelName 返回实际发给上游的 model 名。
 // 很多中转站对外暴露的是自己的计费 SKU（如灵智的 seedance-2.5-guanfang-anmiao），
 // 但 Ark 接口只认火山真名（doubao-seedance-2-5-260628），
@@ -620,7 +652,18 @@ func normalizeModelCapability(value string) string {
 
 func isVideoModelName(modelName string) bool {
 	name := strings.ToLower(strings.TrimSpace(modelName))
-	return name == "minimax-h3" || strings.Contains(name, "seedance") || strings.Contains(name, "video")
+	if name == "minimax-h3" || strings.Contains(name, "seedance") || strings.Contains(name, "video") {
+		return true
+	}
+	// A6API 这类聚合网关的视频模型不一定带 video/seedance 字样
+	// （kling-3.0、veo-3.1、viduq3-pro、sora-2、happyhorse-1.1…），
+	// 只按名字猜会把它们归到「文本」，选择器里就挑不出来。
+	for _, keyword := range []string{"kling", "veo-", "vidu", "sora", "happyhorse", "gemini-omni"} {
+		if strings.Contains(name, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func isImageModelName(modelName string) bool {

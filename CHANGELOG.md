@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.10.11 - 2026-11-02
+
++ [新增] 接入 A6API（a6api.vip）聚合网关，新增 `a6api` 协议，文本 / 图片 / 视频三类能力全部打通：文本走 `/v1/chat/completions`、图片走 `/v1/images/generations`、视频走 `/v1/videos` + `/v1/videos/{id}` 轮询。它本身就是标准 OpenAI 兼容形态，单开一项协议是为了绕开下面两处按模型名的兜底判断
++ [修复] A6API 上的 `doubao-seedance-*` 被 `isArkSeedanceVideo` 判成火山方舟，请求路径改写成 `/contents/generations/tasks` 直接 404。现在协议声明优先，A6API 渠道一律按标准 `/videos` 处理
++ [修复] `kling-3.0`、`veo-3.1`、`viduq3-pro`、`sora-2`、`happyhorse-1.1` 这类不带 `video` 字样的视频模型被猜成「文本」，在视频选择器里**完全不出现**且不报错。前后端的模型名识别都补齐了这批关键词
++ [新增] A6API 的视频请求体单独走 JSON：默认分支的 FormData 会带 `resolution_name`、`preset`、`input_reference[]` 等该平台不认的字段。同时按模型收敛时长（veo-3.1 固定 8 秒、kling-2.6 最多 10 秒、sora-2 最多 12 秒），避免上游回 `video_duration_invalid`
++ [修复] A6API 的 `completed` 状态可能不带 `video_url`，成品需另走 `/v1/videos/{id}/content`。现在完成后统一拉取二进制转存进项目存储，避免结果 URL 过期后画布里变成裂图
++ [优化] 补充 `docs/a6api-integration.md` 接入说明，以及 4 组协议回归测试（含「普通渠道的 seedance 仍走 Ark」的反向保护）
+
 ## v0.10.10 - 2026-10-29
 
 + [新增] 渠道里的每个模型可**显式指定类型**（文字 / 图片 / 视频 / 音频），在后台渠道抽屉的「模型类型」里逐个选择，留「自动」则按模型名猜。模型名一直在更新，只靠关键词表永远追不上；声明过的类型会固化在渠道配置里（`modelCapabilities`），以后改名也不影响分组

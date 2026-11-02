@@ -10,7 +10,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "ark" | "anmiao" | "flatkey";
+    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "ark" | "anmiao" | "flatkey" | "a6api";
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -271,7 +271,7 @@ function isVideoModelName(model: string) {
         value.includes("vidu") ||
         value.includes("pixverse") ||
         value.includes("omni-flash") ||
-        value.includes("gemini-omni-video") ||
+        value.includes("gemini-omni") ||
         value.includes("veo3.1") ||
         value.includes("veo-3.1") ||
         value.includes("infinitalk") ||

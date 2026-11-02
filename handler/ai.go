@@ -678,8 +678,10 @@ func isFlatkeyChannel(channel model.ModelChannel) bool {
 }
 
 func isArkSeedanceVideo(channel model.ModelChannel, modelName string) bool {
-	// Flatkey 有同构但路径不同的任务协议，不能被下面按模型名（seedance）的判定抢走。
-	if isFlatkeyChannel(channel) {
+	// A6API 用标准 OpenAI 视频协议（/v1/videos、/v1/videos/{id}），
+	// 模型名即使带 seedance 也不能走 Ark 任务接口。
+	// Flatkey 有同构但路径不同的任务协议，同样不能被下面按模型名（seedance）的判定抢走。
+	if isFlatkeyChannel(channel) || service.IsA6APIChannel(channel) {
 		return false
 	}
 	// 后台渠道显式选择「火山方舟（Ark）」或「灵智」协议时直接命中，不必再猜接口地址。
