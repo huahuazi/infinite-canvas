@@ -1,6 +1,7 @@
 import axios from "axios";
 
 import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
+import { compressImageFileForUpload } from "@/lib/image-compress";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
@@ -526,6 +527,34 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
 // A6API 视频请求体：标准 OpenAI 视频 JSON（不是 Ark 的 content[]）。
 // 只发有值的字段——该平台对规格是强校验，给不支持音频的模型多塞一个
 // generate_audio 就会被判 video_spec_unrecognized。
+// A6API 的参考图统一内联 Base64。
+//
+// 为什么不给公网 URL：它的网关回源到自建素材出口会卡住——实测带 9 张
+// `https://<站点>/api/media/references/*.png` 的提交 40 秒没有任何响应，
+// 最后按文生视频处理，现象就是「参考图完全没生效」。
+// 内联 Base64 把字节直接塞进请求体，不依赖对方能否访问我们的域名。
+// 体积按张数摊：总预算约 6MB（base64 后约 8MB），单张不低于 120KB 以保住人像细节。
+const A6API_IMAGE_BUDGET_BYTES = 6 * 1024 * 1024;
+
+async function a6apiReferenceImageValue(image: ReferenceImage, targetBytes: number): Promise<string> {
+    try {
+        const file = await imageReferenceToFile(image);
+        const compressed = await compressImageFileForUpload(file, targetBytes);
+        return await readFileAsDataUrl(compressed);
+    } catch (error) {
+        // 压缩或读取失败时退回公网地址，至少还留一次机会。
+        console.warn("A6API 参考图内联失败，退回公网地址：", error);
+        return arkReferenceImageUrl(image);
+    }
+}
+
+async function a6apiReferenceImages(images: ReferenceImage[]): Promise<string[]> {
+    const picked = images.slice(0, 9);
+    if (!picked.length) return [];
+    const perImage = Math.max(120 * 1024, Math.floor(A6API_IMAGE_BUDGET_BYTES / picked.length));
+    return Promise.all(picked.map((image) => a6apiReferenceImageValue(image, perImage)));
+}
+
 async function createA6APIVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>): Promise<Record<string, unknown>> {
     const channel = activeChannelForConfig(config);
     const body: Record<string, unknown> = {
@@ -541,13 +570,13 @@ async function createA6APIVideoRequestBody(config: AiConfig, model: string, prom
     // 多张参考图必须走 images 数组：只发第一张会让用户以为用了全部素材，
     // 而画布上明明挂着好几张。
     if (input.firstFrame) {
-        body.first_frame_image = await arkReferenceImageUrl(input.firstFrame);
+        body.first_frame_image = await a6apiReferenceImageValue(input.firstFrame, A6API_IMAGE_BUDGET_BYTES);
     } else if (input.references.length === 1) {
-        body.image = await arkReferenceImageUrl(input.references[0]);
+        body.image = await a6apiReferenceImageValue(input.references[0], A6API_IMAGE_BUDGET_BYTES);
     } else if (input.references.length > 1) {
-        body.images = await Promise.all(input.references.slice(0, 9).map((reference) => arkReferenceImageUrl(reference)));
+        body.images = await a6apiReferenceImages(input.references);
     }
-    if (input.lastFrame) body.last_frame_image = await arkReferenceImageUrl(input.lastFrame);
+    if (input.lastFrame) body.last_frame_image = await a6apiReferenceImageValue(input.lastFrame, A6API_IMAGE_BUDGET_BYTES);
     if (input.videoReferences.length) body.video = await arkReferenceVideoUrl(input.videoReferences[0]);
     // 注意：文档里的 audio / sound / with_audio 是「是否生成音频」的布尔开关，
     // 不是音频输入。这里绝不能把参考音频的 URL 塞进 body.audio，
@@ -571,13 +600,16 @@ async function createMiniMaxH3VideoRequestBody(config: AiConfig, model: string, 
             { reference: input.firstFrame, role: "first_frame" },
             { reference: input.lastFrame, role: "last_frame" },
         ].filter((item): item is { reference: ReferenceImage; role: string } => Boolean(item.reference));
-        const urls = await Promise.all(frames.map((item) => miniMaxReferenceValue(imageReferenceToFormValue(item.reference))));
+        // 素材必须走公网 URL。画布上的图片默认是 base64 data URL（没有 storageKey），
+        // 直接内联会变成几 MB 的 image_url.url，中转站认不出这种格式就静默丢掉，
+        // 表现为「参考图完全没生效」。arkReferenceImageUrl 会先转存到 /api/media/references。
+        const urls = await Promise.all(frames.map((item) => arkReferenceImageUrl(item.reference)));
         frames.forEach((item, index) => content.push({ type: "image_url", image_url: { url: urls[index] }, role: item.role }));
     } else if (hasReferences) {
         const [images, videos, audios] = await Promise.all([
-            Promise.all(input.references.map((reference) => miniMaxReferenceValue(imageReferenceToFormValue(reference)))),
-            Promise.all(input.videoReferences.map((reference) => miniMaxReferenceValue(mediaReferenceToFormValue(reference)))),
-            Promise.all(input.audioReferences.map((reference) => miniMaxReferenceValue(mediaReferenceToFormValue(reference)))),
+            Promise.all(input.references.map((reference) => arkReferenceImageUrl(reference))),
+            Promise.all(input.videoReferences.map((reference) => arkReferenceVideoUrl(reference))),
+            Promise.all(input.audioReferences.map((reference) => arkReferenceAudioUrl(reference))),
         ]);
         images.forEach((url) => content.push({ type: "image_url", image_url: { url }, role: "reference_image" }));
         videos.forEach((url) => content.push({ type: "video_url", video_url: { url }, role: "reference_video" }));

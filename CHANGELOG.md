@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.11.5 - 2026-11-02
+
++ [修复] A6API 视频的参考图完全没生效。排查结论：请求体里确实带了 9 张 `images` 公网 URL（数据库 request_body 可查），任务也正常 completed，但产出与参考图毫无关系；同时实测「不带图 + 999 秒」秒回、而「带图 + 999 秒」40 秒无任何响应，说明网关卡在回源拉取自建素材上，最后按文生视频处理。现在参考图改为压缩后内联 Base64（按张数摊预算，总量约 6MB，单张不低于 120KB），字节直接进请求体，不再依赖对方能否访问我们的域名；压缩失败时退回公网地址兜底
++ [优化] A6API 的 `images` 仍保持最多 9 张、首/尾帧走独立字段，与官方文档的规格约束一致
+
 ## v0.11.4 - 2026-11-02
 
 + [移除] 移除 Hugging Face 深度视频渠道。官方 Space（`depth-anything/Video-Depth-Anything`）自 2026-08 起报 `Zero GPU Worker Error`，讨论区两条故障报告均为 open、作者自 2025-03 未再更新；网页手动运行与 API 调用都只得到 `event: error / data: null`，已无法使用。协议枚举、Gradio 上传/SSE 调用链、前端下拉与提示一并清理，`IsHuggingFaceChannel` 等判定函数移除，`depth_video.go` 精简约 400 行
