@@ -31,6 +31,12 @@ type Config struct {
 	LinuxDoTokenURL     string `env:"LINUX_DO_TOKEN_URL" envDefault:"https://connect.linux.do/oauth2/token"`
 	LinuxDoUserInfoURL  string `env:"LINUX_DO_USERINFO_URL" envDefault:"https://connect.linux.do/api/user"`
 	AILogDir            string `env:"AI_LOG_DIR" envDefault:"data/logs/ai-calls"`
+	// 参考素材目录（data/reference-media）的保留天数，默认 30 天。
+	// 该目录同时存放「上游回源的参考素材」与「深度视频等任务的产物」：
+	// 前者任务跑完就没用，后者会被画布节点直接引用（video_url 指向这里），
+	// 删早了画布上的视频会 404，所以默认给足 30 天。
+	// 设 0 或负数表示关闭清理。
+	ReferenceMediaRetentionDays int `env:"REFERENCE_MEDIA_RETENTION_DAYS" envDefault:"30"`
 }
 
 var Cfg Config

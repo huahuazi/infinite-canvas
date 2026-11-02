@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.11.1 - 2026-11-02
+
++ [优化] 参考素材目录新增按 mtime 的后台清理。`data/reference-media` 之前完全没有 TTL：深度视频每生成一次就落一个成片，磁盘会持续上涨。现在启动后先扫一次、之后每 6 小时一次，只删保留期外的普通文件（子目录、符号链接、mtime 落在未来的文件一律跳过），删除失败只记日志不中断整轮
++ [新增] 配置项 `REFERENCE_MEDIA_RETENTION_DAYS`，默认 30 天，设 `0` 关闭清理。⚠️ 深度视频产物也被画布节点的 `video_url` 直接引用，保留期太短会让画布里的视频变成 404，所以默认给足 30 天而不是 7 天
+
 ## v0.11.0 - 2026-11-02
 
 + [新增] 画布「生成深度视频」支持真实深度估计：新增 `wavespeed` 与 `huggingface` 两个渠道协议，走 Video Depth Anything 逐帧估计空间深度，不再是让视频模型「照着提示词画深度图」。WaveSpeed 走标准 REST（`POST /api/v3/{model}` + `GET /api/v3/predictions/{id}/result`，$0.005/秒）；Hugging Face 走 Gradio 协议（`/gradio_api/upload` → `/gradio_api/call/infer_video_depth` → SSE 监听 event_id），产物自动转存到本地参考素材目录，Space 重启不丢

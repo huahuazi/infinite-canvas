@@ -19,5 +19,7 @@ func main() {
 	service.StartPromptSyncScheduler()
 	service.StartCanvasProjectCleanupScheduler()
 	handler.StartVideoTaskPoller()
+	// 参考素材目录没有 TTL 会一直涨（深度视频每生成一次就落一个成片），启动后台清理。
+	handler.StartReferenceMediaCleaner()
 	log.Fatal(router.New().Run(":" + config.Cfg.Port))
 }
