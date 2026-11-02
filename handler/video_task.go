@@ -91,6 +91,12 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		proxyHuggingFaceDepthVideoTask(w, r, user, userChannelID, channel, modelName, body, credits, startedAt)
 		return
 	}
+	// WaveSpeed 同样要「先上传素材、再提交任务」：只传 URL 它会自己回源，
+	// 拉不到我们的域名就报 4006（媒体时长读不出来），所以也走独立流程。
+	if service.IsWaveSpeedChannel(channel) {
+		proxyWaveSpeedDepthVideoTask(w, r, user, userChannelID, channel, modelName, body, credits, startedAt)
+		return
+	}
 	upstreamPath := resolveAIProxyPath(channel, modelName, "/videos")
 	// 灵智的文档站（lk666.ai）只托管网页，任何 /api 请求都会返回 200 + HTML，
 	// 提前拦下并说明正确的 API 域名，否则现场只剩一句「视频接口没有返回任务 ID」。

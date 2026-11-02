@@ -650,6 +650,214 @@ func proxyHuggingFaceDepthVideoTask(
 }
 
 // -----------------------------------------------------------------------------
+// WaveSpeed 素材直传
+// -----------------------------------------------------------------------------
+
+// uploadWaveSpeedMedia 把素材直传到 WaveSpeed 存储，返回可直接喂给模型的 download_url。
+//
+// 为什么不让上游自己回源：只传 URL 时 WaveSpeed 会主动去拉，拉到不动的网络/证书链就报
+// `4006 Could not read the duration of the provided media`（官方对 4006 的定义就是
+// 「媒体时长读不出来」）。改用官方 /media/uploads：先取一次性票据，再 PUT 字节，
+// 文件直达存储，完全不依赖对方能否访问我们的域名。
+func uploadWaveSpeedMedia(channel model.ModelChannel, filename string, payload []byte, contentType string) (string, error) {
+	if len(payload) == 0 {
+		return "", errors.New("源视频为空，无法上传到 WaveSpeed")
+	}
+	ticketPayload, err := json.Marshal(map[string]any{
+		"filename":     filename,
+		"size":         len(payload),
+		"content_type": contentType,
+	})
+	if err != nil {
+		return "", err
+	}
+	endpoint := service.BuildModelChannelURL(channel, "/media/uploads")
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(ticketPayload))
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	service.SetModelChannelAuthHeader(request, channel)
+	response, status, err := doAIRequest(request, channel)
+	if err != nil {
+		return "", err
+	}
+	if status >= http.StatusBadRequest {
+		return "", fmt.Errorf("%s", readUpstreamAIErrorMessage(response, status))
+	}
+	var ticket struct {
+		Data struct {
+			DownloadURL string `json:"download_url"`
+			Upload      struct {
+				Method  string            `json:"method"`
+				URL     string            `json:"url"`
+				Headers map[string]string `json:"headers"`
+			} `json:"upload"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response, &ticket); err != nil {
+		return "", errors.New("WaveSpeed 上传票据解析失败")
+	}
+	if ticket.Data.Upload.URL == "" || ticket.Data.DownloadURL == "" {
+		return "", errors.New("WaveSpeed 没有返回上传地址，请检查 access key 与上传配额")
+	}
+	method := strings.ToUpper(strings.TrimSpace(ticket.Data.Upload.Method))
+	if method == "" {
+		method = http.MethodPut
+	}
+	putRequest, err := http.NewRequest(method, ticket.Data.Upload.URL, bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	for key, value := range ticket.Data.Upload.Headers {
+		putRequest.Header.Set(key, value)
+	}
+	// 注意：票据本身就是一次性凭证，PUT 时绝不能带 Authorization（官方明确禁止）。
+	putClient := &http.Client{Timeout: 300 * time.Second}
+	putResponse, err := putClient.Do(putRequest)
+	if err != nil {
+		return "", fmt.Errorf("上传素材到 WaveSpeed 失败：%v", err)
+	}
+	defer putResponse.Body.Close()
+	if putResponse.StatusCode >= http.StatusBadRequest {
+		detail, _ := io.ReadAll(io.LimitReader(putResponse.Body, 4<<10))
+		return "", fmt.Errorf("上传素材到 WaveSpeed 失败：HTTP %d %s", putResponse.StatusCode, truncateForMessage(string(detail), 160))
+	}
+	return ticket.Data.DownloadURL, nil
+}
+
+// parseWaveSpeedDepthSource 取出请求体里的源视频地址。
+func parseWaveSpeedDepthSource(body []byte) (string, error) {
+	var payload map[string]any
+	if len(body) == 0 || json.Unmarshal(body, &payload) != nil {
+		return "", errors.New("深度视频请求体不是合法 JSON")
+	}
+	source := readDepthVideoSourceURL(payload)
+	if source == "" {
+		return "", errors.New("深度视频需要一个视频素材（video 字段），当前请求里没有")
+	}
+	return source, nil
+}
+
+// proxyWaveSpeedDepthVideoTask 处理 WaveSpeed 深度视频的创建请求。
+// 与 HF 同理，因为要「先上传再提交」，无法套用只改 body 的通用流程。
+func proxyWaveSpeedDepthVideoTask(
+	w http.ResponseWriter,
+	r *http.Request,
+	user model.AuthUser,
+	userChannelID string,
+	channel model.ModelChannel,
+	modelName string,
+	body []byte,
+	credits int,
+	startedAt time.Time,
+) {
+	logContext := aiLogContext{
+		StartedAt:       startedAt,
+		Endpoint:        "/videos",
+		Method:          http.MethodPost,
+		Model:           modelName,
+		Channel:         channel,
+		UserID:          user.ID,
+		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
+		Credits:         credits,
+		RequestBody:     summarizeAIRequest(body, "application/json"),
+	}
+	failWithRefund := func(message string, response []byte) {
+		if credits > 0 {
+			refundVideoCredits(user.ID, modelName, credits, "/videos")
+		}
+		saveAIProxyLog(logContext, 0, string(response), message)
+		Fail(w, message)
+	}
+	source, err := parseWaveSpeedDepthSource(body)
+	if err != nil {
+		failWithRefund(err.Error(), nil)
+		return
+	}
+	payload, filename, err := downloadDepthVideoSource(channel, source)
+	if err != nil {
+		failWithRefund(err.Error(), nil)
+		return
+	}
+	mimeType := "video/mp4"
+	if ext := strings.ToLower(filepath.Ext(filename)); ext == ".mov" {
+		mimeType = "video/quicktime"
+	}
+	downloadURL, err := uploadWaveSpeedMedia(channel, filename, payload, mimeType)
+	if err != nil {
+		failWithRefund(err.Error(), nil)
+		return
+	}
+	submitBody, err := json.Marshal(map[string]any{"video": downloadURL})
+	if err != nil {
+		failWithRefund(err.Error(), nil)
+		return
+	}
+	upstreamModel := strings.TrimPrefix(strings.TrimSpace(service.UpstreamModelName(channel, modelName)), "/")
+	endpoint := service.BuildModelChannelURL(channel, "/"+upstreamModel)
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(submitBody))
+	if err != nil {
+		failWithRefund("AI 接口请求失败", nil)
+		return
+	}
+	request.Header.Set("Content-Type", "application/json")
+	service.SetModelChannelAuthHeader(request, channel)
+	response, status, err := doAIRequest(request, channel)
+	if err != nil {
+		failWithRefund("AI 接口请求失败", nil)
+		return
+	}
+	if status >= http.StatusBadRequest {
+		failWithRefund(readUpstreamAIErrorMessage(response, status), response)
+		return
+	}
+	transformed := response
+	if normalized, ok := transformWaveSpeedDepthPayload(response); ok {
+		transformed = normalized
+	}
+	if message := readVideoCreateErrorMessage(response, transformed, channel, modelName); message != "" {
+		failWithRefund(message, response)
+		return
+	}
+	parsed := parseVideoTaskPayload(transformed, modelName)
+	if parsed.UpstreamTaskID == "" && parsed.UpstreamVideoID == "" {
+		failWithRefund("视频接口没有返回任务 ID", transformed)
+		return
+	}
+	task, err := service.CreateVideoTask(service.VideoTaskCreateInput{
+		UserID:          user.ID,
+		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
+		Model:           modelName,
+		ChannelID:       channel.ID,
+		UserChannelID:   userChannelID,
+		ChannelName:     channel.Name,
+		Source:          readVideoTaskSource(r),
+		SourceID:        readVideoTaskSourceID(r),
+		ClientTaskID:    readClientVideoTaskID(r),
+		UpstreamTaskID:  parsed.UpstreamTaskID,
+		UpstreamVideoID: parsed.UpstreamVideoID,
+		Status:          parsed.Status,
+		Progress:        parsed.Progress,
+		Seconds:         parsed.Seconds,
+		Size:            parsed.Size,
+		VideoURL:        parsed.VideoURL,
+		Error:           parsed.Error,
+		ErrorDetail:     parsed.ErrorDetail,
+		RequestBody:     logContext.RequestBody,
+		ResponseBody:    string(transformed),
+		Credits:         credits,
+	})
+	if err != nil {
+		log.Printf("save wave speed depth video task failed: model=%s err=%v", modelName, err)
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	saveAIProxyLog(logContext, status, string(transformed), "")
+	OK(w, service.VideoTaskResponse(task))
+}
+
+// -----------------------------------------------------------------------------
 // 共用小工具
 // -----------------------------------------------------------------------------
 

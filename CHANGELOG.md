@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.11.3 - 2026-11-02
+
++ [修复] WaveSpeed 深度视频报 `4006 Could not read the duration of the provided media`。这不是文件问题：素材是标准 H.264 720x1280 30fps + AAC，境外下载 200 / Range 206 / ffprobe 时长 7.03s 全部正常，是我们的域名在某些机房回源拉不动。改为走 WaveSpeed 官方的素材直传接口（`POST /api/v3/media/uploads` 取票据 → `PUT` 上传字节 → 用 `download_url` 提交任务），文件直达存储，不再依赖对方回源；PUT 时不带 Authorization（官方明确禁止）。素材上限 200MiB、保留 7 天
+
 ## v0.11.2 - 2026-11-02
 
 + [修复] Hugging Face 深度视频一提交就报 `tls: failed to verify certificate: x509: certificate is not valid for any names`。原因：Gradio 的 upload 只收文件本体，后端需要先用 HTTP 把画布给的源视频地址下载回来，而容器内解析自家域名（`huabu.leohome.site`）拿到的是内网 IPv6 与反代的内部证书，Go 直接拒绝。现在源地址命中 `/api/media/references/{id}` 时直接读本地磁盘，不再绕公网，顺带省掉一次往返；路径穿越与空 id 会被拒绝
