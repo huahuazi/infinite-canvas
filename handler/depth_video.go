@@ -252,6 +252,17 @@ func submitHuggingFaceDepthVideo(channel model.ModelChannel, params huggingFaceD
 // downloadDepthVideoSource 把公网视频取回内存，供 Gradio 的 multipart 上传使用。
 // Gradio 的 upload 端点只收文件本体，不收 URL，所以必须先落地再传。
 func downloadDepthVideoSource(channel model.ModelChannel, sourceURL string) ([]byte, string, error) {
+	// 先判断是不是本项目自己的素材出口：是的话磁盘里就有，直接读。
+	// 容器内解析自家域名经常拿到内网 IPv6 + 反代的内部证书，Go 会直接报
+	// x509: certificate is not valid for any names；而且公网绕一圈纯属浪费。
+	if path, ok := localReferenceMediaPath(sourceURL); ok {
+		if payload, err := os.ReadFile(path); err == nil && len(payload) > 0 {
+			if int64(len(payload)) > depthVideoSourceMaxBytes {
+				return nil, "", fmt.Errorf("源视频超过 %dMB，Hugging Face 无法接收", depthVideoSourceMaxBytes>>20)
+			}
+			return payload, filepath.Base(path), nil
+		}
+	}
 	request, err := http.NewRequest(http.MethodGet, sourceURL, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("深度视频的源视频地址不可用：%v", err)
@@ -275,6 +286,29 @@ func downloadDepthVideoSource(channel model.ModelChannel, sourceURL string) ([]b
 		return nil, "", errors.New("源视频为空，请确认画布素材已经上传成功")
 	}
 	return payload, depthVideoSourceFilename(sourceURL, response.Header.Get("Content-Type")), nil
+}
+
+// localReferenceMediaPath 判断源地址是不是本项目自己的素材出口
+// （{PUBLIC_BASE_URL}/api/media/references/{id}），是的话返回本地磁盘路径。
+//
+// 为什么要短路：容器内解析自家域名会拿到内网 IPv6 地址，反代在那条链路返回的是
+// 没有 SAN 的内部证书，Go 直接报 `x509: certificate is not valid for any names`；
+// 而文件本来就在 /app/data/reference-media 里，读磁盘又快又稳。
+func localReferenceMediaPath(sourceURL string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(sourceURL))
+	if err != nil {
+		return "", false
+	}
+	const prefix = "/api/media/references/"
+	if !strings.HasPrefix(parsed.Path, prefix) {
+		return "", false
+	}
+	id := strings.TrimPrefix(parsed.Path, prefix)
+	// 与 ReferenceMedia handler 保持一致的路径安全校验，防止 ../ 穿越。
+	if id == "" || id != filepath.Base(id) || strings.Contains(id, "..") {
+		return "", false
+	}
+	return filepath.Join(referenceMediaDir(), id), true
 }
 
 func depthVideoSourceFilename(sourceURL string, contentType string) string {

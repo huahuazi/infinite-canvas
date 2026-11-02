@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.11.2 - 2026-11-02
+
++ [修复] Hugging Face 深度视频一提交就报 `tls: failed to verify certificate: x509: certificate is not valid for any names`。原因：Gradio 的 upload 只收文件本体，后端需要先用 HTTP 把画布给的源视频地址下载回来，而容器内解析自家域名（`huabu.leohome.site`）拿到的是内网 IPv6 与反代的内部证书，Go 直接拒绝。现在源地址命中 `/api/media/references/{id}` 时直接读本地磁盘，不再绕公网，顺带省掉一次往返；路径穿越与空 id 会被拒绝
+
 ## v0.11.1 - 2026-11-02
 
 + [优化] 参考素材目录新增按 mtime 的后台清理。`data/reference-media` 之前完全没有 TTL：深度视频每生成一次就落一个成片，磁盘会持续上涨。现在启动后先扫一次、之后每 6 小时一次，只删保留期外的普通文件（子目录、符号链接、mtime 落在未来的文件一律跳过），删除失败只记日志不中断整轮
