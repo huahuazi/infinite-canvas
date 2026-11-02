@@ -1,7 +1,7 @@
 import type { AiConfig } from "@/stores/use-config-store";
 import { activeChannelForConfig, channelProtocolForConfig } from "@/stores/use-config-store";
 import { isAnmiaoChannel, isFlatkeyBaseUrl } from "@/lib/seedance-video";
-import { isDepthVideoModelName, isHuggingFaceBaseUrl, isWaveSpeedBaseUrl } from "@/lib/model-channel";
+import { isDepthVideoModelName, isWaveSpeedBaseUrl } from "@/lib/model-channel";
 import { modelKey } from "@/lib/video-model-capabilities";
 
 /** 视频派生类型：白模（clay render）/ 深度图（depth map）。 */
@@ -54,11 +54,11 @@ export const VIDEO_DERIVE_PRESETS: Record<VideoDeriveKind, VideoDerivePreset> = 
  */
 export function isRealDepthVideoConfig(config: AiConfig): boolean {
     const protocol = channelProtocolForConfig(config);
-    if (protocol === "wavespeed" || protocol === "huggingface") return true;
+    if (protocol === "wavespeed") return true;
     if (protocol) return false;
     const channel = activeChannelForConfig(config);
     const baseUrl = channel?.baseUrl || config.baseUrl || "";
-    return isWaveSpeedBaseUrl(baseUrl) || isHuggingFaceBaseUrl(baseUrl);
+    return isWaveSpeedBaseUrl(baseUrl);
 }
 
 /**

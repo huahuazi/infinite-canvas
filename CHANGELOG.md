@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.11.4 - 2026-11-02
+
++ [移除] 移除 Hugging Face 深度视频渠道。官方 Space（`depth-anything/Video-Depth-Anything`）自 2026-08 起报 `Zero GPU Worker Error`，讨论区两条故障报告均为 open、作者自 2025-03 未再更新；网页手动运行与 API 调用都只得到 `event: error / data: null`，已无法使用。协议枚举、Gradio 上传/SSE 调用链、前端下拉与提示一并清理，`IsHuggingFaceChannel` 等判定函数移除，`depth_video.go` 精简约 400 行
++ [优化] 深度视频只保留 WaveSpeed 一个渠道，素材统一走官方 `/media/uploads` 直传，不再依赖上游回源
+
 ## v0.11.3 - 2026-11-02
 
 + [修复] WaveSpeed 深度视频报 `4006 Could not read the duration of the provided media`。这不是文件问题：素材是标准 H.264 720x1280 30fps + AAC，境外下载 200 / Range 206 / ffprobe 时长 7.03s 全部正常，是我们的域名在某些机房回源拉不动。改为走 WaveSpeed 官方的素材直传接口（`POST /api/v3/media/uploads` 取票据 → `PUT` 上传字节 → 用 `download_url` 提交任务），文件直达存储，不再依赖对方回源；PUT 时不带 Authorization（官方明确禁止）。素材上限 200MiB、保留 7 天

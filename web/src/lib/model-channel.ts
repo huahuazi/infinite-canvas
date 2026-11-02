@@ -1,4 +1,4 @@
-export type ModelChannelProtocol = "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "ark" | "anmiao" | "flatkey" | "a6api" | "wavespeed" | "huggingface";
+export type ModelChannelProtocol = "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "ark" | "anmiao" | "flatkey" | "a6api" | "wavespeed";
 
 export const modelChannelDefaultBaseUrls: Record<ModelChannelProtocol, string> = {
     openai: "https://api.openai.com",
@@ -13,7 +13,6 @@ export const modelChannelDefaultBaseUrls: Record<ModelChannelProtocol, string> =
     flatkey: "https://router.flatkey.ai/v1",
     a6api: "https://api.a6api.vip",
     wavespeed: "https://api.wavespeed.ai",
-    huggingface: "https://depth-anything-video-depth-anything.hf.space",
 };
 
 export const modelChannelApiKeyUrls: Partial<Record<ModelChannelProtocol, string>> = {
@@ -23,7 +22,6 @@ export const modelChannelApiKeyUrls: Partial<Record<ModelChannelProtocol, string
     ark: "https://console.volcengine.com/ark/region:ark+cn-beijing/apikey",
     anmiao: "https://api.lk888.ai",
     wavespeed: "https://wavespeed.ai/accesskey",
-    huggingface: "https://huggingface.co/settings/tokens",
 };
 
 // 火山方舟通道的提示信息，供后台渠道表单展示。
@@ -82,30 +80,11 @@ export const wavespeedChannelTips = {
     limits: "按输入视频秒数计费（$0.005/秒，最低 3 秒、最长 600 秒）。video 必须是公网可访问的 URL，不支持本地文件直传；产物保留输入分辨率与音轨。",
 };
 
-// Hugging Face Gradio Space 深度视频通道提示。
-// 官方 Video-Depth-Anything 演示跑在 ZeroGPU 上，未登录无法触发 GPU 计算。
-export const huggingfaceChannelTips = {
-    baseUrl: "填 https://depth-anything-video-depth-anything.hf.space（官方 Space 直连域名）。直接粘 huggingface.co/spaces/... 页面地址也能自动换算成直连域名。",
-    apiKey: "这里填 Hugging Face 的 Access Token（hf_ 开头，Read 权限足够）。ZeroGPU 强制要求登录状态，不填必定失败。",
-    models: "深度视频模型填 video-depth-anything；实际调用的是 Space 的 infer_video_depth 端点，参数顺序固定为 video / max_len / target_fps / max_res / grayscale。",
-    limits: "免费账号每天 5 分钟 GPU、单次最长 240 秒，长视频会排队甚至超时。建议 max_res 用 518（与模型 input_size 一致），必要时降 target_fps；产物由后端转存到本地，Space 重启不会丢。",
-};
-
 // 判断 Base URL 是否指向 WaveSpeedAI。
 export function isWaveSpeedBaseUrl(baseUrl: string) {
     try {
         const host = new URL(String(baseUrl || "").trim()).hostname.toLowerCase();
         return host === "api.wavespeed.ai" || host.endsWith(".wavespeed.ai");
-    } catch {
-        return false;
-    }
-}
-
-// 判断 Base URL 是否指向 Hugging Face Space。
-export function isHuggingFaceBaseUrl(baseUrl: string) {
-    try {
-        const host = new URL(String(baseUrl || "").trim()).hostname.toLowerCase();
-        return host === "hf.space" || host.endsWith(".hf.space") || host === "huggingface.co" || host.endsWith(".huggingface.co");
     } catch {
         return false;
     }
@@ -124,8 +103,4 @@ export function isDepthVideoModelName(modelName: string) {
     return name.includes("depth-anything") || name.includes("depth_anything") || name.includes("video-depth") || name.includes("depth-video");
 }
 
-// 深度视频的两个渠道与默认模型，供渠道表单与画布侧共用。
-export const depthVideoChannelDefaults = {
-    wavespeed: { protocol: "wavespeed" as const, model: "wavespeed-ai/depth-anything/video", label: "WaveSpeedAI" },
-    huggingface: { protocol: "huggingface" as const, model: "video-depth-anything", label: "HuggingFace Space" },
-};
+

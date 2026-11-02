@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
-import { a6apiChannelTips, a6apiModelCapabilityHint, anmiaoChannelTips, arkChannelTips, flatkeyChannelTips, huggingfaceChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, wavespeedChannelTips } from "@/lib/model-channel";
+import { a6apiChannelTips, a6apiModelCapabilityHint, anmiaoChannelTips, arkChannelTips, flatkeyChannelTips, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, wavespeedChannelTips } from "@/lib/model-channel";
 import { isAnmiaoChannel } from "@/lib/seedance-video";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { guessModelCapability, useConfigStore } from "@/stores/use-config-store";
@@ -761,7 +761,7 @@ export default function AdminSettingsPage() {
                                     dataSource={channelTableData}
                                     columns={[
                                         { title: "名称", dataIndex: "name", render: (value) => value || "未命名渠道" },
-                                        { title: "协议", dataIndex: "protocol", width: 112, render: (value) => <Tag>{value === "ark" ? "火山方舟" : value === "anmiao" ? "灵智" : value === "flatkey" ? "Flatkey" : value === "a6api" ? "A6API" : value === "wavespeed" ? "WaveSpeedAI" : value === "huggingface" ? "HuggingFace" : value || "openai"}</Tag> },
+                                        { title: "协议", dataIndex: "protocol", width: 112, render: (value) => <Tag>{value === "ark" ? "火山方舟" : value === "anmiao" ? "灵智" : value === "flatkey" ? "Flatkey" : value === "a6api" ? "A6API" : value === "wavespeed" ? "WaveSpeedAI" : value || "openai"}</Tag> },
                                         { title: "状态", dataIndex: "enabled", width: 96, render: (value) => <Tag color={value ? "success" : "default"}>{value ? "已启用" : "已停用"}</Tag> },
                                         {
                                             title: "模型",
@@ -856,7 +856,6 @@ export default function AdminSettingsPage() {
                                             { label: "Flatkey", value: "flatkey" },
                                             { label: "A6API", value: "a6api" },
                                             { label: "WaveSpeedAI（深度视频）", value: "wavespeed" },
-                                            { label: "HuggingFace（深度视频）", value: "huggingface" },
                                         ]}
                                         onChange={(protocol: AdminModelChannel["protocol"]) => {
                                             channelForm.setFieldValue("baseUrl", modelChannelDefaultBaseUrls[protocol]);
@@ -895,7 +894,7 @@ export default function AdminSettingsPage() {
                                         </span>
                                     }
                                     rules={[{ required: true, message: "请输入接口地址" }]}
-                                    extra={channelProtocol === "ark" ? arkChannelTips.baseUrl : channelProtocol === "anmiao" ? anmiaoChannelTips.baseUrl : channelProtocol === "flatkey" ? flatkeyChannelTips.baseUrl : channelProtocol === "a6api" ? a6apiChannelTips.baseUrl : channelProtocol === "wavespeed" ? wavespeedChannelTips.baseUrl : channelProtocol === "huggingface" ? huggingfaceChannelTips.baseUrl : undefined}
+                                    extra={channelProtocol === "ark" ? arkChannelTips.baseUrl : channelProtocol === "anmiao" ? anmiaoChannelTips.baseUrl : channelProtocol === "flatkey" ? flatkeyChannelTips.baseUrl : channelProtocol === "a6api" ? a6apiChannelTips.baseUrl : channelProtocol === "wavespeed" ? wavespeedChannelTips.baseUrl : undefined}
                                 >
                                     <Input />
                                 </Form.Item>
@@ -905,13 +904,12 @@ export default function AdminSettingsPage() {
                                     name="apiKey"
                                     label="API Key"
                                     rules={editingChannelIndex === null ? [{ required: true, message: "请输入 API Key" }] : []}
-                                    extra={channelProtocol === "huggingface" ? huggingfaceChannelTips.apiKey : undefined}
                                 >
                                     <Input.Password placeholder={editingChannelIndex === null ? "" : "留空则沿用已保存的 API Key"} />
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item label="渠道可用模型" extra={channelProtocol === "ark" ? arkChannelTips.models : channelProtocol === "anmiao" ? anmiaoChannelTips.models : channelProtocol === "flatkey" ? flatkeyChannelTips.models : channelProtocol === "a6api" ? a6apiChannelTips.models : channelProtocol === "wavespeed" ? wavespeedChannelTips.models : channelProtocol === "huggingface" ? huggingfaceChannelTips.models : undefined}>
+                                <Form.Item label="渠道可用模型" extra={channelProtocol === "ark" ? arkChannelTips.models : channelProtocol === "anmiao" ? anmiaoChannelTips.models : channelProtocol === "flatkey" ? flatkeyChannelTips.models : channelProtocol === "a6api" ? a6apiChannelTips.models : channelProtocol === "wavespeed" ? wavespeedChannelTips.models : undefined}>
                                     <Space.Compact style={{ width: "100%" }}>
                                         <Form.Item name="models" noStyle>
                                             <Select mode="tags" maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: model, value: model }))} />
@@ -936,7 +934,7 @@ export default function AdminSettingsPage() {
                             <Col span={24}>
                                 <Form.Item
                                     label="模型名映射"
-                                    extra={isAnmiaoChannel(channelProtocol, channelForm.getFieldValue("baseUrl")) ? `${anmiaoChannelTips.modelAliases}\n${anmiaoChannelTips.limits}` : channelProtocol === "a6api" ? `${a6apiChannelTips.modelAliases}\n${a6apiChannelTips.limits}` : channelProtocol === "wavespeed" ? `${wavespeedChannelTips.modelAliases}\n${wavespeedChannelTips.limits}` : channelProtocol === "huggingface" ? huggingfaceChannelTips.limits : "可选。每行一条「前端模型名 = 上游模型名」，用于把中转站的计费 SKU 映射成上游真实模型名；两边同名时不需要填。"}
+                                    extra={isAnmiaoChannel(channelProtocol, channelForm.getFieldValue("baseUrl")) ? `${anmiaoChannelTips.modelAliases}\n${anmiaoChannelTips.limits}` : channelProtocol === "a6api" ? `${a6apiChannelTips.modelAliases}\n${a6apiChannelTips.limits}` : channelProtocol === "wavespeed" ? `${wavespeedChannelTips.modelAliases}\n${wavespeedChannelTips.limits}` : "可选。每行一条「前端模型名 = 上游模型名」，用于把中转站的计费 SKU 映射成上游真实模型名；两边同名时不需要填。"}
                                 >
                                     <Form.Item name="modelAliasesText" noStyle>
                                         <Input.TextArea rows={3} placeholder={"seedance-2.5-guanfang-anmiao = doubao-seedance-2-5-260628"} onChange={(event) => channelForm.setFieldValue("modelAliases", parseModelAliasesText(event.target.value))} />

@@ -85,12 +85,6 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		credits *= readAIRequestCount(body, contentType)
 	}
-	// Hugging Face 的深度视频跑在 Gradio 协议上（上传文件 → 取 event_id → SSE 监听），
-	// 没有 /videos + /videos/{id} 的任务语义，必须在路径改写之前单独分流。
-	if service.IsHuggingFaceChannel(channel) {
-		proxyHuggingFaceDepthVideoTask(w, r, user, userChannelID, channel, modelName, body, credits, startedAt)
-		return
-	}
 	// WaveSpeed 同样要「先上传素材、再提交任务」：只传 URL 它会自己回源，
 	// 拉不到我们的域名就报 4006（媒体时长读不出来），所以也走独立流程。
 	if service.IsWaveSpeedChannel(channel) {
@@ -363,23 +357,6 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	}
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
-	}
-	// Hugging Face 的深度视频没有 REST 查询接口，靠 SSE 监听 event_id。
-	if service.IsHuggingFaceChannel(channel) {
-		update, payload, pollErr := pollHuggingFaceDepth(channel, task.UpstreamTaskID)
-		if len(payload) > 0 {
-			saveAIProxyLog(aiLogContext{
-				StartedAt:       time.Now(),
-				Endpoint:        "/videos/" + task.UpstreamTaskID,
-				Method:          http.MethodGet,
-				Model:           task.Model,
-				Channel:         channel,
-				UserID:          task.UserID,
-				UserDisplayName: task.UserDisplayName,
-				RequestBody:     fmt.Sprintf(`{"eventId":%q}`, task.UpstreamTaskID),
-			}, http.StatusOK, string(payload), firstNonEmpty(update.Error, ""))
-		}
-		return update, pollErr
 	}
 	pollID := firstNonEmpty(task.UpstreamTaskID, task.ID)
 	if isAgnesVideoModel(task.Model) && strings.HasPrefix(task.UpstreamVideoID, "video_") {

@@ -352,7 +352,6 @@ export function AppConfigModal() {
                                                     { label: "Flatkey", value: "flatkey" },
                                                     { label: "A6API", value: "a6api" },
                                                     { label: "WaveSpeedAI（深度视频）", value: "wavespeed" },
-                                                    { label: "HuggingFace（深度视频）", value: "huggingface" },
                                                 ]}
                                                 onChange={(protocol: LocalModelChannel["protocol"]) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
                                             />

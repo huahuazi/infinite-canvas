@@ -702,7 +702,7 @@ func isArkSeedanceVideo(channel model.ModelChannel, modelName string) bool {
 	// WaveSpeed / Hugging Face 的深度视频是各自独立的协议，
 	// 尤其 WaveSpeed 的 Base URL 天然带 /api/v3，不排除会被当成火山方舟。
 	if isFlatkeyChannel(channel) || service.IsA6APIChannel(channel) ||
-		service.IsWaveSpeedChannel(channel) || service.IsHuggingFaceChannel(channel) {
+		service.IsWaveSpeedChannel(channel) {
 		return false
 	}
 	// 后台渠道显式选择「火山方舟（Ark）」或「灵智」协议时直接命中，不必再猜接口地址。

@@ -5,7 +5,7 @@ import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio,
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
 import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isAnmiaoChannel, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
-import { isA6APIBaseUrl, isDepthVideoModelName, isHuggingFaceBaseUrl, isWaveSpeedBaseUrl } from "@/lib/model-channel";
+import { isA6APIBaseUrl, isDepthVideoModelName, isWaveSpeedBaseUrl } from "@/lib/model-channel";
 import { normalizeA6APIVideoSeconds } from "@/lib/a6api-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
@@ -58,7 +58,7 @@ function isArkSeedanceVideoRequest(config: AiConfig, model: string) {
     if (protocol === "a6api") return false;
     // 深度视频渠道是各自独立的协议。WaveSpeed 的地址天然带 /api/v3，
     // 不排除会被下面的 isArkBaseUrl 判定抢走，请求打到 /contents/generations/tasks 必 404。
-    if (protocol === "wavespeed" || protocol === "huggingface") return false;
+    if (protocol === "wavespeed") return false;
     if (isDepthVideoRequest(config)) return false;
     // 后台渠道显式选择「火山方舟（Ark）」或「灵智」协议时直接判定，不必再猜接口地址。
     // 灵智是 Ark 的一种方言，任务路径同样是 /contents/generations/tasks。
@@ -129,43 +129,24 @@ function isA6APIVideoRequest(config: AiConfig) {
 // HF Space 会回显 Origin），所以这纯粹是密钥与产物管理的架构选择，不是浏览器限制。
 export function isDepthVideoRequest(config: AiConfig) {
     const protocol = channelProtocolForConfig(config);
-    if (protocol === "wavespeed" || protocol === "huggingface") return true;
+    if (protocol === "wavespeed") return true;
     // 显式选了别的协议时不要被地址反向覆盖（与后端的判定顺序保持一致）。
     if (protocol) return false;
     const channel = activeChannelForConfig(config);
     const baseUrl = channel?.baseUrl || config.baseUrl || "";
-    return isWaveSpeedBaseUrl(baseUrl) || isHuggingFaceBaseUrl(baseUrl);
+    return isWaveSpeedBaseUrl(baseUrl);
 }
 
-// 深度视频的输出分辨率直接复用画布已有的清晰度选项。
-// Hugging Face 的 Space 单次只有 240 秒 GPU：518 与模型内部 input_size 一致，
-// 跑得最快也最不容易超时，所以没有清晰度或选不中档位时都回落到 518。
-function depthVideoMaxRes(vquality: string | undefined) {
-    const text = String(vquality || "").toLowerCase();
-    if (text.includes("1080")) return 1080;
-    if (text.includes("720")) return 720;
-    if (text.includes("480")) return 480;
-    return 518;
-}
-
-// 深度视频请求体：模型 + 源视频，外加 Hugging Face 的四个推理参数。
-// WaveSpeed 只认 video 一个字段，其余参数发上去会被忽略甚至报错，所以按渠道分开拼。
+// 深度视频请求体：WaveSpeed 只认 video 一个字段，多发会被忽略甚至报错。
 async function createDepthVideoRequestBody(config: AiConfig, model: string, input: Required<VideoReferenceInput>): Promise<Record<string, unknown>> {
     const source = input.videoReferences[0];
     if (!source) throw new VideoRequestError("深度视频需要先挂一个视频素材：深度是从已有画面估计空间结构，不能凭空生成");
     const channel = activeChannelForConfig(config);
     const body: Record<string, unknown> = {
         model: upstreamModelNameForChannel(channel, model),
-        // WaveSpeed 与 Space 都只接受可访问的视频地址，不接受本地文件或 base64。
+        // WaveSpeed 只接受可访问的视频地址，不接受本地文件或 base64。
         video: await arkReferenceVideoUrl(source),
     };
-    if (channelProtocolForConfig(config) === "huggingface") {
-        // 参数顺序由 Space 的端点签名固定：max_len / target_fps / max_res / grayscale
-        body.max_len = -1;
-        body.target_fps = -1;
-        body.max_res = depthVideoMaxRes(config.vquality);
-        body.grayscale = true;
-    }
     return body;
 }
 
