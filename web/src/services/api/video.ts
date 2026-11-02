@@ -600,16 +600,16 @@ async function createMiniMaxH3VideoRequestBody(config: AiConfig, model: string, 
             { reference: input.firstFrame, role: "first_frame" },
             { reference: input.lastFrame, role: "last_frame" },
         ].filter((item): item is { reference: ReferenceImage; role: string } => Boolean(item.reference));
-        // 素材必须走公网 URL。画布上的图片默认是 base64 data URL（没有 storageKey），
-        // 直接内联会变成几 MB 的 image_url.url，中转站认不出这种格式就静默丢掉，
-        // 表现为「参考图完全没生效」。arkReferenceImageUrl 会先转存到 /api/media/references。
-        const urls = await Promise.all(frames.map((item) => arkReferenceImageUrl(item.reference)));
+        // 素材必须内联 Base64：MiniMax 侧拉公网 URL 会直接报
+        // `content[n].image_url: cannot download media URL`，而官方接受 data URI。
+        // 别改成 arkReferenceImageUrl —— 那条路是给 A6API 试的，会把 metaso 弄挂。
+        const urls = await Promise.all(frames.map((item) => miniMaxReferenceValue(imageReferenceToFormValue(item.reference))));
         frames.forEach((item, index) => content.push({ type: "image_url", image_url: { url: urls[index] }, role: item.role }));
     } else if (hasReferences) {
         const [images, videos, audios] = await Promise.all([
-            Promise.all(input.references.map((reference) => arkReferenceImageUrl(reference))),
-            Promise.all(input.videoReferences.map((reference) => arkReferenceVideoUrl(reference))),
-            Promise.all(input.audioReferences.map((reference) => arkReferenceAudioUrl(reference))),
+            Promise.all(input.references.map((reference) => miniMaxReferenceValue(imageReferenceToFormValue(reference)))),
+            Promise.all(input.videoReferences.map((reference) => miniMaxReferenceValue(mediaReferenceToFormValue(reference)))),
+            Promise.all(input.audioReferences.map((reference) => miniMaxReferenceValue(mediaReferenceToFormValue(reference)))),
         ]);
         images.forEach((url) => content.push({ type: "image_url", image_url: { url }, role: "reference_image" }));
         videos.forEach((url) => content.push({ type: "video_url", video_url: { url }, role: "reference_video" }));
