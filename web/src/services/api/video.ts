@@ -6,6 +6,7 @@ import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, gemini
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
 import { ARK_VIDEO_TASK_PATH, FLATKEY_VIDEO_PATH, SEEDANCE_REFERENCE_LIMITS, boolConfig, isAnmiaoChannel, isArkBaseUrl, isFlatkeyBaseUrl, isSeedanceVideoConfig, isSeedanceVideoModel, normalizeArkBaseUrl, normalizeFlatkeyBaseUrl, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution } from "@/lib/seedance-video";
 import { isA6APIBaseUrl } from "@/lib/model-channel";
+import { normalizeA6APIVideoSeconds } from "@/lib/a6api-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
@@ -451,7 +452,7 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
         body.append("mode", normalizeAPIMartKlingMotionControlMode(config.vquality));
     } else {
         if (!kieMotionControl && !isGeminiOmniFlashVideoModel(model)) body.append("seconds", normalizeVideoSecondsForModel(model, config.videoSeconds));
-        if (isSeedanceVideoConfig(config)) body.append("size", normalizeSeedanceRatio(config.size));
+        if (isSeedanceVideoConfig(config, channelProtocolForConfig(config))) body.append("size", normalizeSeedanceRatio(config.size));
         else if (size) body.append("size", size);
         body.append("resolution_name", normalizeVideoResolution(config.vquality));
         if (isKIEGrokVideoModel(config, model)) body.append("mode", normalizeGrokVideoMode(config.videoMode));
@@ -471,33 +472,6 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     return body;
 }
 
-// A6API 各视频模型的时长上限并不一致（veo-3.1 固定 8 秒、kling-2.6 最多 10 秒、
-// sora-2 最多 12 秒…），超限时上游直接回 video_duration_invalid，
-// 前端在这里先按接入文档的模型表收敛，别把明显不合法的值发出去。
-function a6apiVideoDurationRule(model: string): { max: number; fixed?: number; auto: boolean } {
-    const key = modelKey(model);
-    if (key.includes("veo-3-1")) return { max: 8, fixed: 8, auto: false };
-    if (key.includes("kling-2-6")) return { max: 10, auto: false };
-    if (key.includes("kling-3") || key.includes("kling-4")) return { max: 15, auto: false };
-    if (key.includes("viduq3")) return { max: 16, auto: false };
-    if (key.includes("sora-2")) return { max: 12, auto: false };
-    if (key.includes("grok-imagine-video")) return { max: 15, auto: false };
-    if (key.includes("minimax-h3") || key.includes("happyhorse")) return { max: 15, auto: false };
-    if (key.includes("seedance-2-5")) return { max: 30, auto: true };
-    if (key.includes("seedance")) return { max: 15, auto: true };
-    if (key.includes("wan3")) return { max: 30, auto: true };
-    // 表外模型：接入文档标注默认 4 秒、保护上限 60 秒。
-    return { max: 60, auto: true };
-}
-
-function normalizeA6APIVideoSeconds(model: string, value: string): number {
-    const rule = a6apiVideoDurationRule(model);
-    if (rule.fixed) return rule.fixed;
-    const raw = String(value ?? "").trim().toLowerCase();
-    if (raw === "-1" || raw === "auto") return rule.auto ? -1 : 5;
-    const seconds = Math.floor(Number(raw) || 5);
-    return Math.max(1, Math.min(rule.max, seconds));
-}
 
 // A6API 视频请求体：标准 OpenAI 视频 JSON（不是 Ark 的 content[]）。
 // 只发有值的字段——该平台对规格是强校验，给不支持音频的模型多塞一个
@@ -514,11 +488,20 @@ async function createA6APIVideoRequestBody(config: AiConfig, model: string, prom
     if (boolConfig(config.videoGenerateAudio, false)) body.generate_audio = true;
 
     // 首帧/尾帧用独立字段，和普通参考图不要混发，否则上游会判规格冲突。
-    if (input.firstFrame) body.first_frame_image = await arkReferenceImageUrl(input.firstFrame);
-    else if (input.references.length) body.image = await arkReferenceImageUrl(input.references[0]);
+    // 多张参考图必须走 images 数组：只发第一张会让用户以为用了全部素材，
+    // 而画布上明明挂着好几张。
+    if (input.firstFrame) {
+        body.first_frame_image = await arkReferenceImageUrl(input.firstFrame);
+    } else if (input.references.length === 1) {
+        body.image = await arkReferenceImageUrl(input.references[0]);
+    } else if (input.references.length > 1) {
+        body.images = await Promise.all(input.references.slice(0, 9).map((reference) => arkReferenceImageUrl(reference)));
+    }
     if (input.lastFrame) body.last_frame_image = await arkReferenceImageUrl(input.lastFrame);
     if (input.videoReferences.length) body.video = await arkReferenceVideoUrl(input.videoReferences[0]);
-    if (input.audioReferences.length) body.audio = await arkReferenceAudioUrl(input.audioReferences[0]);
+    // 注意：文档里的 audio / sound / with_audio 是「是否生成音频」的布尔开关，
+    // 不是音频输入。这里绝不能把参考音频的 URL 塞进 body.audio，
+    // 否则上游会把它当布尔值解析，直接判规格错误。参考音频当前不发送。
     const negative = config.videoNegativePrompt?.trim();
     if (negative) body.metadata = { negative_prompt: negative };
     return body;

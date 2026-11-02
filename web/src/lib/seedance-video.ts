@@ -137,7 +137,11 @@ const seedancePixels = {
     },
 } as const;
 
-export function isSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoModel" | "baseUrl">) {
+export function isSeedanceVideoConfig(config: Pick<AiConfig, "model" | "videoModel" | "baseUrl">, protocol = "") {
+    // A6API 虽然是 OpenAI 兼容网关、也能挂 seedance 模型，但它的尺寸语义是
+    // size=像素（1280x720）、时长语义是 seconds。套用火山那套 ratio/resolution
+    // 会把用户选的清晰度丢掉（buildVideoConfig 会把 size 归一化成 "16:9"）。
+    if (String(protocol || "").trim().toLowerCase() === "a6api") return false;
     return isSeedanceVideoModel(config.model || config.videoModel) || isArkBaseUrl(config.baseUrl);
 }
 

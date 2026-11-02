@@ -102,7 +102,8 @@ grok-imagine-image / -2.0 / -edit / -lite / -pro
   "size": "1280x720",
   "first_frame_image": "https://... | data:image/png;base64,...",
   "last_frame_image": "...",
-  "image": "...",
+  "image": "单张参考图时用这个",
+  "images": ["多张参考图时用数组，与 image 二选一"],
   "generate_audio": true,
   "metadata": { "negative_prompt": "..." }
 }
@@ -115,8 +116,10 @@ grok-imagine-image / -2.0 / -edit / -lite / -pro
 2. **只发有值的字段**
    该平台对规格是强校验，给不支持音频的模型多塞一个 `generate_audio` 会直接回 `video_spec_unrecognized`。
 3. **首尾帧与普通参考图分开**
-   有首帧走 `first_frame_image`，否则拿参考图第一张走 `image`；尾帧走 `last_frame_image`。混着发会被判规格冲突。
-4. **时长按模型收敛**（新增 `normalizeA6APIVideoSeconds`）
+   有首帧走 `first_frame_image`；否则单张参考图走 `image`，多张走 `images` 数组（不能只发第一张，否则用户以为素材全用上了）。尾帧走 `last_frame_image`。混着发会被判规格冲突。
+4. **不要把参考音频塞进 `audio`**
+   文档里的 `audio` / `sound` / `with_audio` 是「是否生成音频」的布尔开关，不是音频输入。当前实现不发送参考音频。
+5. **时长按模型收敛**（新增 `normalizeA6APIVideoSeconds`，规则表在 `lib/a6api-video.ts`，与设置面板共用）
 
 | 模型 | 收敛规则 |
 |---|---|

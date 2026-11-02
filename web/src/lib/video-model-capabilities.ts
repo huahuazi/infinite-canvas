@@ -19,6 +19,10 @@ export function normalizeCogVideoX3Duration(value: string) {
 
 export function supportsVideoFrameReferences(modelName: string, protocol = "") {
     const model = modelKey(modelName);
+    // A6API 把 first_frame_image / last_frame_image 做成通用可选字段，
+    // 不像火山那样按模型族区分。这里放行，否则视频页连首帧上传口都不显示，
+    // 用户想图生视频却无从下手。具体某个模型是否接尾帧，交由上游规格校验。
+    if (protocol === "a6api") return true;
     return (
         isAgnesVideoV25Model(model) ||
         isCogVideoX3Model(model) ||

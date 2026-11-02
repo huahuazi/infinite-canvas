@@ -306,6 +306,8 @@ function isImageModelName(model: string) {
         value.includes("dall-e") ||
         value.includes("dalle") ||
         value.includes("imagen") ||
+        // ideogram 的名字里既没有 image 也没有 imagen，漏了会被归到「文本」。
+        value.includes("ideogram") ||
         value.includes("gemini-2.5-flash") ||
         value.includes("gemini-3-pro") ||
         value.includes("gemini-3.1-flash") ||

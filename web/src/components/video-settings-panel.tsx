@@ -4,6 +4,7 @@ import { type CSSProperties, type ReactNode } from "react";
 import { Input, Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
+import { a6apiVideoDurationMax, a6apiVideoDurationRule, normalizeA6APIVideoSeconds } from "@/lib/a6api-video";
 import { boolConfig, isAnmiaoChannel, isSeedance25Model, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationMax, seedanceDurationOptionsFor, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { COGVIDEOX3_DURATIONS, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
@@ -80,14 +81,22 @@ export function VideoSettingsPanel({ config, modelName, onConfigChange, theme, s
     if (isAPIMartKlingV26Config(config, modelName || config.model || config.videoModel) || isAPIMartKlingV3Config(config, modelName || config.model || config.videoModel) || isKIEKlingV3Config(config, modelName || config.model || config.videoModel)) {
         return <KlingV26VideoSettingsPanel config={config} modelName={modelName} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} hideNegativePrompt={hideNegativePrompt} visualOnly={visualOnly} />;
     }
-    if (isSeedanceVideoConfig(config)) {
+    if (isSeedanceVideoConfig(config, channelProtocolForConfig(config))) {
         return <SeedanceVideoSettingsPanel config={config} modelName={modelName} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} visualOnly={visualOnly} />;
     }
 
     const model = modelName || config.model || config.videoModel;
+    // A6API 每个视频模型的时长上限不同（veo-3.1 固定 8 秒、kling-2.6 最多 10 秒），
+    // 这里和请求体共用同一张表，避免「面板能选 30 秒、实际只发 10 秒」。
+    const a6apiRule = channelProtocolForConfig(config) === "a6api" ? a6apiVideoDurationRule(model) : null;
     const grokMode = config.videoMode === "fun" || config.videoMode === "spicy" ? config.videoMode : "normal";
     const cogVideoX3 = isCogVideoX3Model(model);
-    const seconds = cogVideoX3 ? normalizeCogVideoX3Duration(config.videoSeconds) : config.videoSeconds || "6";
+    const seconds = a6apiRule
+        ? String(normalizeA6APIVideoSeconds(model, config.videoSeconds))
+        : cogVideoX3 ? normalizeCogVideoX3Duration(config.videoSeconds) : config.videoSeconds || "6";
+    const durationChoices = a6apiRule
+        ? (a6apiRule.fixed ? [a6apiRule.fixed] : secondOptions.filter((value) => value <= a6apiRule.max))
+        : secondOptions;
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
     const resolution = normalizeVideoResolutionValue(config.vquality);
@@ -186,13 +195,20 @@ export function VideoSettingsPanel({ config, modelName, onConfigChange, theme, s
                     <>
                         <SettingGroup title="秒数" color={theme.node.muted}>
                             <div className="grid grid-cols-3 gap-2.5">
-                                {(cogVideoX3 ? COGVIDEOX3_DURATIONS : secondOptions).map((value) => (
+                                {(cogVideoX3 ? COGVIDEOX3_DURATIONS : durationChoices).map((value) => (
                                     <OptionPill key={value} selected={seconds === String(value)} theme={theme} onClick={() => onConfigChange("videoSeconds", String(value))}>
                                         {value}s
                                     </OptionPill>
                                 ))}
-                                {cogVideoX3 ? null : <NumberInput value={seconds} min={1} max={30} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />}
+                                {cogVideoX3 ? null : <NumberInput value={seconds} min={1} max={a6apiRule ? a6apiVideoDurationMax(model) : 30} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />}
                             </div>
+                            {a6apiRule ? (
+                                <div className="text-[11px] leading-4 opacity-55">
+                                    {a6apiRule.fixed
+                                        ? `当前模型固定 ${a6apiRule.fixed} 秒时长，不可调整。`
+                                        : `当前模型最长 ${a6apiRule.max} 秒${a6apiRule.auto ? "，可留空使用智能时长" : "，不支持智能时长"}。`}
+                                </div>
+                            ) : null}
                         </SettingGroup>
                         {audioGenerationEnabled ? <AudioGenerationSetting checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}
                     </>

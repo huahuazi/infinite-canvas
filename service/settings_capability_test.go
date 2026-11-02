@@ -99,3 +99,29 @@ func TestRepairDefaultModelKeepsValidCurrent(t *testing.T) {
 		t.Fatalf("合格值被换掉了: %q", got)
 	}
 }
+
+// A6API 挂的模型名不一定带 image/video 字样，能力猜测必须能识别，
+// 否则它们会被归到「文本」，在对应的选择器里彻底消失。
+func TestA6APIModelCapabilityGuess(t *testing.T) {
+	cases := []struct {
+		model string
+		want  string
+	}{
+		{"kling-3.0", capabilityVideo},
+		{"veo-3.1", capabilityVideo},
+		{"viduq3-pro", capabilityVideo},
+		{"sora-2", capabilityVideo},
+		{"happyhorse-1.1", capabilityVideo},
+		{"gemini-omni-1.1-flash", capabilityVideo},
+		{"gpt-image-2.5", capabilityImage},
+		{"flux-3-image", capabilityImage},
+		{"ideogram-4", capabilityImage},
+		{"grok-imagine-image-pro", capabilityImage},
+		{"claude-opus-5", capabilityText},
+	}
+	for _, item := range cases {
+		if got := guessModelCapability(item.model); got != item.want {
+			t.Fatalf("%s 识别为 %q，期望 %q", item.model, got, item.want)
+		}
+	}
+}

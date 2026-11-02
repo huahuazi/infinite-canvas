@@ -668,7 +668,9 @@ func isVideoModelName(modelName string) bool {
 
 func isImageModelName(modelName string) bool {
 	name := strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(name, "seedream") || strings.Contains(name, "gpt-image") || strings.Contains(name, "image")
+	// ideogram 这类名字里不带 image 的图像模型，不补就会掉进「文本」选择器。
+	return strings.Contains(name, "seedream") || strings.Contains(name, "gpt-image") ||
+		strings.Contains(name, "image") || strings.Contains(name, "ideogram")
 }
 
 func isAudioModelName(modelName string) bool {

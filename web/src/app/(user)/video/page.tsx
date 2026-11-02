@@ -161,9 +161,14 @@ export default function VideoPage() {
     // Seedance 2.5 的素材上限比老型号宽得多（参考图 30、参考视频 10、参考音频 10），
     // 统一按 SEEDANCE_REFERENCE_LIMITS（9/3/3）卡会让用户根本传不到协议允许的数量。
     const seedance25 = isSeedance25Model(model);
-    const referenceImageLimit = klingOmni === "text-to-video" ? 0 : klingOmni === "image-to-video" ? 2 : klingOmni === "transformation" ? 4 : isKlingWorkbench && klingOmni !== "reference-to-video" ? 2 : (seedance25 ? 30 : SEEDANCE_REFERENCE_LIMITS.images);
-    const videoReferenceLimit = klingAcceptsVideoReferences ? 1 : (seedance25 ? 10 : SEEDANCE_REFERENCE_LIMITS.videos);
-    const audioReferenceLimit = seedance25 ? 10 : SEEDANCE_REFERENCE_LIMITS.audios;
+    // A6API 的请求体只发固定数量的素材：参考图走 images 数组最多 9 张、
+    // 参考视频只发第 1 个、参考音频当前不发送（文档里 audio 是布尔开关，不是输入）。
+    // UI 上限必须与之一致，否则用户挂 30 张图只有 9 张生效、挂 10 个视频只发 1 个，
+    // 而且全程不报错——这是最难排查的一类「看起来成功」。
+    const a6api = channelProtocolForConfig({ ...videoConfig, model }) === "a6api";
+    const referenceImageLimit = a6api ? 9 : klingOmni === "text-to-video" ? 0 : klingOmni === "image-to-video" ? 2 : klingOmni === "transformation" ? 4 : isKlingWorkbench && klingOmni !== "reference-to-video" ? 2 : (seedance25 ? 30 : SEEDANCE_REFERENCE_LIMITS.images);
+    const videoReferenceLimit = a6api ? 1 : klingAcceptsVideoReferences ? 1 : (seedance25 ? 10 : SEEDANCE_REFERENCE_LIMITS.videos);
+    const audioReferenceLimit = a6api ? 0 : seedance25 ? 10 : SEEDANCE_REFERENCE_LIMITS.audios;
     const pendingLogCount = logs.filter((log) => log.status === "生成中" && log.task && !log.video).length;
     const usesBackendVideoTasks = (value: AiConfig) => value.channelMode === "remote" || (value.channelMode === "local" && Boolean(token));
 
@@ -331,10 +336,13 @@ export default function VideoPage() {
         if (unsupported.length) message.warning(isKlingWorkbench ? `当前 Kling 模型仅支持${klingAcceptsVideoReferences ? "参考图和参考视频" : "参考图"}` : "已忽略不支持的参考素材，请使用图片、mp4/mov 视频或 mp3/wav 音频");
         const imageFiles = selectedFiles.filter((file) => file.type.startsWith("image/") && file.size <= SEEDANCE_REFERENCE_LIMITS.imageMaxBytes).slice(0, Math.max(0, referenceImageLimit - references.length));
         const videoFiles = isKlingWorkbench && !klingAcceptsVideoReferences ? [] : selectedFiles.filter((file) => file.type.startsWith("video/") && file.size <= SEEDANCE_REFERENCE_LIMITS.videoMaxBytes).slice(0, Math.max(0, videoReferenceLimit - videoReferences.length));
-        const audioFiles = isKlingWorkbench ? [] : selectedFiles.filter((file) => isSupportedAudioFile(file) && file.size <= SEEDANCE_REFERENCE_LIMITS.audioMaxBytes).slice(0, audioReferenceLimit - audioReferences.length);
+        const audioFiles = isKlingWorkbench ? [] : selectedFiles.filter((file) => isSupportedAudioFile(file) && file.size <= SEEDANCE_REFERENCE_LIMITS.audioMaxBytes).slice(0, Math.max(0, audioReferenceLimit - audioReferences.length));
         if (selectedFiles.some((file) => file.type.startsWith("image/") && file.size > SEEDANCE_REFERENCE_LIMITS.imageMaxBytes)) message.warning("已忽略超过 30MB 的参考图");
         if (selectedFiles.some((file) => file.type.startsWith("video/") && file.size > SEEDANCE_REFERENCE_LIMITS.videoMaxBytes)) message.warning("已忽略超过 50MB 的参考视频");
         if (selectedFiles.some((file) => isSupportedAudioFile(file) && file.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes)) message.warning("已忽略超过 15MB 的参考音频");
+        // 上限为 0 说明当前渠道根本不发音频（A6API 的 audio 是布尔开关，不是输入），
+        // 直接说明原因，别让用户以为文件选漏了。
+        if (!audioReferenceLimit && selectedFiles.some((file) => isSupportedAudioFile(file))) message.warning("当前渠道不支持参考音频，已忽略");
         const hideLoading = imageFiles.length ? message.loading("正在上传参考图...", 0) : null;
         try {
             const nextReferences = await Promise.all(
@@ -495,6 +503,11 @@ export default function VideoPage() {
     };
 
     const addAudioReferencesFromClipboard = async () => {
+        // 上限为 0 时没必要去读剪贴板，直接说明当前渠道不支持参考音频。
+        if (!audioReferenceLimit) {
+            message.warning("当前渠道不支持参考音频");
+            return;
+        }
         try {
             const items = await navigator.clipboard.read();
             const blobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => type.startsWith("audio/")).map((type) => item.getType(type))));
@@ -502,7 +515,7 @@ export default function VideoPage() {
                 message.error("剪切板里没有可读取的音频");
                 return;
             }
-            const usable = blobs.filter((blob) => blob.size <= SEEDANCE_REFERENCE_LIMITS.audioMaxBytes).slice(0, audioReferenceLimit - audioReferences.length);
+            const usable = blobs.filter((blob) => blob.size <= SEEDANCE_REFERENCE_LIMITS.audioMaxBytes).slice(0, Math.max(0, audioReferenceLimit - audioReferences.length));
             if (blobs.some((blob) => blob.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes)) message.warning("已忽略超过 15MB 的参考音频");
             const nextAudioReferences = filterAudioReferencesByDuration(
                 audioReferences,
@@ -1383,7 +1396,8 @@ function WorkbenchPanel({
         : showAudioSwitch ? "lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.7fr_0.8fr_0.7fr_auto_auto]" : "lg:grid-cols-[1.3fr_0.8fr_0.8fr_0.7fr_0.7fr_auto_auto]";
     const initializedKlingV3BottomSecondsRef = useRef(false);
     // Seedance 2.5 允许 10 个参考视频，老型号仍是 3 个；空态提示要跟着型号走。
-    const videoReferenceLimit = isSeedance25Model(model) ? 10 : SEEDANCE_REFERENCE_LIMITS.videos;
+    // A6API 只发第一个，这里的提示也必须说 1，不能写 10 让用户白传。
+    const videoReferenceLimit = channelProtocolForConfig({ ...config, model }) === "a6api" ? 1 : isSeedance25Model(model) ? 10 : SEEDANCE_REFERENCE_LIMITS.videos;
 
     useEffect(() => {
         if (klingBottomVariant !== "v3" || initializedKlingV3BottomSecondsRef.current) return;
@@ -1436,7 +1450,7 @@ function WorkbenchPanel({
                                 <KlingV26BottomSettings config={config} updateConfig={updateConfig} generateAudio={generateAudio} isKlingV3={klingBottomVariant === "v3"} />
                             ) : (
                                 <>
-                                    <QuickSelect label="清晰度" value={normalizeVideoResolutionValue(config.vquality)} options={isSeedanceVideoConfig(config) ? videoResolutionOptions.slice(0, 3) : videoResolutionOptions} onChange={(value) => { updateConfig("vquality", value); updateConfig("size", videoSizeForResolution(value, config.size)); }} />
+                                    <QuickSelect label="清晰度" value={normalizeVideoResolutionValue(config.vquality)} options={isSeedanceVideoConfig(config, channelProtocolForConfig(config)) ? videoResolutionOptions.slice(0, 3) : videoResolutionOptions} onChange={(value) => { updateConfig("vquality", value); updateConfig("size", videoSizeForResolution(value, config.size)); }} />
                                     <QuickSelect label="尺寸" value={videoSizeForResolution(config.vquality, config.size)} options={videoSizeOptions(config.vquality)} onChange={(value) => updateConfig("size", value)} />
                                     {cogVideoX3 ? <QuickSelect label="秒数" value={normalizeCogVideoX3Duration(config.videoSeconds)} options={cogVideoX3DurationOptions} onChange={(value) => updateConfig("videoSeconds", value)} /> : <QuickNumber label="秒数" value={normalizeVideoSeconds(config.videoSeconds)} min={1} max={30} onChange={(value) => updateConfig("videoSeconds", value)} />}
                                     {audioGenerationEnabled ? <QuickSwitch label="生成音频" checked={generateAudio} onChange={(checked) => updateConfig("videoGenerateAudio", String(checked))} /> : null}
@@ -2777,7 +2791,7 @@ function buildLog({ prompt, model, config, references, firstFrame, lastFrame, vi
 }
 
 function buildVideoConfig(config: AiConfig, model: string): AiConfig {
-    const seedance = isSeedanceVideoConfig({ ...config, model });
+    const seedance = isSeedanceVideoConfig({ ...config, model }, channelProtocolForConfig({ ...config, model }));
     const cogVideoX3 = isCogVideoX3Model(model);
     const klingV26 = isAPIMartKlingV26Config(config, model);
     const apimartKlingV3 = isAPIMartKlingV3Config(config, model);
